@@ -1,4 +1,13 @@
-本文将介绍6.824 Lab2（测试用例2021/2020版 2A + 2B + 2C部分）的具体实现。代码通过5000次测试，大致上应该没有问题。2021版的测试还有一个2D的部分，并没有包含在本文中。2D部分是关于Raft Snapshot，过早的实现2D可能会掩盖一些隐藏的bug。比如2C的一些test其实会产生超长的歧义链，这个时候就需要实现fast rollback优化，但是如果过早实现了snapshot就可以通过发送snapshot的方式直接修正歧义链。
+本项目为 Mit6.824 分布式课程的 Lab2，参考链接：https://github.com/s09g/raft-go/tree/main。
+
+Lab2，也就是实现Raft算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验：
+
+- Lab2A：leader 选举（leader election）、心跳（heartbeat）。
+- Lab2B：日志复制（Log replication）。
+- Lab2C：状态存储（state persistent）。
+
+
+
 
 ## Raft的结构
 
