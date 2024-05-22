@@ -18,11 +18,14 @@ type AppendEntriesReply struct {
 	XLen     int
 }
 
+// 发送追加条目RPC，用于日志复制和发送心跳
 func (rf *Raft) appendEntries(heartbeat bool) {
-	lastLog := rf.log.lastLog()
+	lastLog := rf.log.lastLog() // 获取最新的一条日志
+
+	// 遍历集群中的每个节点
 	for peer, _ := range rf.peers {
-		if peer == rf.me {
-			rf.resetElectionTimer()
+		if peer == rf.me { // 如果是当前节点
+			rf.resetElectionTimer() // 重置electionTime，并跳过
 			continue
 		}
 		// rules for leader 3
@@ -36,19 +39,20 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 			}
 			prevLog := rf.log.at(nextIndex - 1)
 			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLog.Index,
-				PrevLogTerm:  prevLog.Term,
-				Entries:      make([]Entry, lastLog.Index-nextIndex+1),
+				Term:         rf.currentTerm,                           // 任期
+				LeaderId:     rf.me,                                    // leaderID，集群节点数据的下标
+				PrevLogIndex: prevLog.Index,                            // 上一个日志的index
+				PrevLogTerm:  prevLog.Term,                             // 上一个日志的任期
+				Entries:      make([]Entry, lastLog.Index-nextIndex+1), // 所有新的日志
 				LeaderCommit: rf.commitIndex,
 			}
-			copy(args.Entries, rf.log.slice(nextIndex))
-			go rf.leaderSendEntries(peer, &args)
+			copy(args.Entries, rf.log.slice(nextIndex)) // 填充日志
+			go rf.leaderSendEntries(peer, &args)        // 给节点发送追加条目RPC
 		}
 	}
 }
 
+// 发送追加条目RPC（日志复制或者发送心跳）
 func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	var reply AppendEntriesReply
 	ok := rf.sendAppendEntries(serverId, args, &reply)
@@ -57,16 +61,19 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// 如果响应的任期大于leader节点的任期
 	if reply.Term > rf.currentTerm {
 		rf.setNewTerm(reply.Term)
 		return
 	}
+
 	if args.Term == rf.currentTerm {
 		// rules for leader 3.1
 		if reply.Success {
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next) // 根据响应更新 nextIndex 和 matchIndex
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {

@@ -59,12 +59,12 @@ const (
 	Leader              = "Leader"
 )
 
-// A Go object implementing a single Raft peer.
+// 代表raft的一个节点，即一个状态机
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	peers     []*labrpc.ClientEnd // Raft 集群中的所有节点
 	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
+	me        int                 // peers[] 的下标
 	dead      int32               // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
@@ -79,14 +79,14 @@ type Raft struct {
 	// Persistent state on all servers:
 	currentTerm int
 	votedFor    int
-	log         Log
+	log         Log // 节点上的指令日志，严格按照顺序执行，则所有状态机都能达成一致
 
 	// Volatile state on all servers:
 	commitIndex int
 	lastApplied int
 
 	// Volatile state on leaders:
-	nextIndex  []int
+	nextIndex  []int //
 	matchIndex []int
 
 	applyCh   chan ApplyMsg
@@ -97,14 +97,16 @@ type Raft struct {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() {
-	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String())
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
+	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String()) // 打印当前节点的状态信息，主要用于调试和日志记录
+	w := new(bytes.Buffer)                                   // 创建一个字节缓冲区，用于临时存储编码后的数据
+	e := labgob.NewEncoder(w)                                // 创建一个新的编码器，将数据写入字节缓冲区
+
+	e.Encode(rf.currentTerm) // 将 currentTerm 编码并写入缓冲区
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+
+	data := w.Bytes()                // 获取缓冲区中的字节数组，即编码后的数据
+	rf.persister.SaveRaftState(data) // 将编码后的数据保存到稳定存储中，以便在崩溃和重启后可以恢复
 }
 
 // restore previously persisted state.
@@ -158,23 +160,29 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
+// 接受客户端的command，并且应用在raft的算法中
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if rf.state != Leader {
+	if rf.state != Leader { // 如果不是leader，则结束
 		return -1, rf.currentTerm, false
 	}
-	index := rf.log.lastLog().Index + 1
+	index := rf.log.lastLog().Index + 1 // 指令日志索引号+1
 	term := rf.currentTerm
 
+	// 新增一条日志保存到状态机中
 	log := Entry{
 		Command: command,
 		Index:   index,
 		Term:    term,
 	}
 	rf.log.append(log)
+
+	// 持久化
 	rf.persist()
 	DPrintf("[%v]: term %v Start %v", rf.me, term, log)
+
+	// 发送追加条目RPC
 	rf.appendEntries(false)
 
 	return index, term, true
@@ -199,8 +207,7 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-// The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// ticker 以心跳为周期不断检查自己的状态，如果没有收到心跳包，则开始一个新的leader选举过程
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
@@ -210,10 +217,10 @@ func (rf *Raft) ticker() {
 		time.Sleep(rf.heartBeat)
 		rf.mu.Lock()
 		if rf.state == Leader {
-			rf.appendEntries(true)
+			rf.appendEntries(true) // 如果是leader，发送一个心跳包（追加条目RPC）
 		}
 		if time.Now().After(rf.electionTime) {
-			rf.leaderElection()
+			rf.leaderElection() // 如果选举超时，则开启新的一轮leader选举
 		}
 		rf.mu.Unlock()
 	}
@@ -267,6 +274,7 @@ func (rf *Raft) apply() {
 	DPrintf("[%v]: rf.applyCond.Broadcast()", rf.me)
 }
 
+// 日志提交
 func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

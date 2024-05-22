@@ -18,24 +18,24 @@ func (rf *Raft) GetState() (int, bool) {
 
 func (rf *Raft) resetElectionTimer() {
 	t := time.Now()
-	electionTimeout := time.Duration(150 + rand.Intn(150)) * time.Millisecond
+	electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond
 	rf.electionTime = t.Add(electionTimeout)
 }
 
 func (rf *Raft) setNewTerm(term int) {
 	if term > rf.currentTerm || rf.currentTerm == 0 {
-		rf.state = Follower
-		rf.currentTerm = term
-		rf.votedFor = -1
+		rf.state = Follower   // 设置当前的节点为Follower
+		rf.currentTerm = term // 设置当前的任期为term
+		rf.votedFor = -1      // 取消投票
 		DPrintf("[%d]: set term %v\n", rf.me, rf.currentTerm)
-		rf.persist()
+		rf.persist() // 持久化
 	}
 }
 
 func (rf *Raft) leaderElection() {
 	rf.currentTerm++
-	rf.state = Candidate
-	rf.votedFor = rf.me
+	rf.state = Candidate // 首先将自己的状态设置为 Candidate
+	rf.votedFor = rf.me  // 给自己投上一票
 	rf.persist()
 	rf.resetElectionTimer()
 	term := rf.currentTerm

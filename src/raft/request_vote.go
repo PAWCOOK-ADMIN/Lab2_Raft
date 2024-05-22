@@ -115,9 +115,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCo
 
 	*voteCounter++
 
-	if *voteCounter > len(rf.peers)/2 &&
-		rf.currentTerm == args.Term &&
-		rf.state == Candidate {
+	if *voteCounter > len(rf.peers)/2 && rf.currentTerm == args.Term && rf.state == Candidate { // 当收到半数以上的投票则进入leader状态
 		DPrintf("[%d]: 获得多数选票，可以提前结束\n", rf.me)
 		becomeLeader.Do(func() {
 			DPrintf("[%d]: 当前term %d 结束\n", rf.me, rf.currentTerm)
@@ -128,7 +126,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCo
 				rf.matchIndex[i] = 0
 			}
 			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
-			rf.appendEntries(true)
+			rf.appendEntries(true) // 成为leader后立刻发送一个心跳包
 		})
 	}
 }
