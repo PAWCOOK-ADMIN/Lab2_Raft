@@ -65,13 +65,13 @@ type Raft struct {
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
+	dead      int32               // 由 Kill() 函数设置
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	state         RaftState
+	state         RaftState // 节点的状态，leader、Follower、Candidate
 	appendEntryCh chan *Entry
 	heartBeat     time.Duration
 	electionTime  time.Time
@@ -93,9 +93,8 @@ type Raft struct {
 	applyCond *sync.Cond
 }
 
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
+// 将 Raft 的持久状态保存到稳定存储中，以便在崩溃和重启后可以检索到。
+// 参见论文的图 2 以了解应该持久化的内容。
 func (rf *Raft) persist() {
 	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String())
 	w := new(bytes.Buffer)
@@ -199,14 +198,11 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-// The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// 如果没有收到心跳，则开始一个新的选举
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
+		// 在此处编写代码来检查是否应该启动领导者选举，并使用 time.Sleep() 来随机化睡眠时间。
 		time.Sleep(rf.heartBeat)
 		rf.mu.Lock()
 		if rf.state == Leader {
@@ -219,17 +215,14 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
+// Make 服务或测试者希望创建一个 Raft 服务器。
+// 所有 Raft 服务器的端口（包括这个服务器的端口）都在 peers[] 数组中。
+// 这个服务器的端口是 peers[me]。
+// 所有服务器的 peers[] 数组的顺序都是相同的。
+// persister 是一个用于保存这个服务器的持久状态的地方，并且最初还包含最近保存的状态（如果有的话）。
+// applyCh 是一个通道，测试者或服务期望 Raft 在这个通道上发送 ApplyMsg 消息。
+// Make 函数必须快速返回，因此应该为任何长时间运行的工作启动 goroutines。
+func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -255,7 +248,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
+	// 启动一个定时器，开始leader选举
 	go rf.ticker()
 
 	go rf.applier()
