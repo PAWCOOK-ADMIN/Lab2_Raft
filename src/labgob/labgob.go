@@ -20,7 +20,7 @@ var errorCount int // for TestCapital
 var checked map[reflect.Type]bool
 
 type LabEncoder struct {
-	gob *gob.Encoder
+	gob *gob.Encoder //  Go语言中特有的，用于将数据结构编码为二进制格式的强大工具
 }
 
 func NewEncoder(w io.Writer) *LabEncoder {
@@ -112,13 +112,11 @@ func checkType(t reflect.Type) {
 	}
 }
 
-//
 // warn if the value contains non-default values,
 // as it would if one sent an RPC but the reply
 // struct was already modified. if the RPC reply
 // contains default values, GOB won't overwrite
 // the non-default value.
-//
 func checkDefault(value interface{}) {
 	if value == nil {
 		return

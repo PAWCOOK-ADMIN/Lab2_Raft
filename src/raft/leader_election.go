@@ -26,18 +26,18 @@ func (rf *Raft) setNewTerm(term int) {
 	if term > rf.currentTerm || rf.currentTerm == 0 {
 		rf.state = Follower   // 设置当前的节点为Follower
 		rf.currentTerm = term // 设置当前的任期为term
-		rf.votedFor = -1      // 取消投票
+		rf.votedFor = -1
 		DPrintf("[%d]: set term %v\n", rf.me, rf.currentTerm)
 		rf.persist() // 持久化
 	}
 }
 
 func (rf *Raft) leaderElection() {
-	rf.currentTerm++
+	rf.currentTerm++     // 任期号+1
 	rf.state = Candidate // 首先将自己的状态设置为 Candidate
 	rf.votedFor = rf.me  // 给自己投上一票
 	rf.persist()
-	rf.resetElectionTimer()
+	rf.resetElectionTimer() // 重置选举超时时间
 	term := rf.currentTerm
 	voteCounter := 1
 	lastLog := rf.log.lastLog()
@@ -45,12 +45,12 @@ func (rf *Raft) leaderElection() {
 	args := RequestVoteArgs{
 		Term:         term,
 		CandidateId:  rf.me,
-		LastLogIndex: lastLog.Index,
-		LastLogTerm:  lastLog.Term,
+		LastLogIndex: lastLog.Index, // 当前节点上最新日志的index
+		LastLogTerm:  lastLog.Term,  // 当前节点上最新日志的任期
 	}
 
 	var becomeLeader sync.Once
-	for serverId, _ := range rf.peers {
+	for serverId, _ := range rf.peers { // 给所有其他节点发送请求投票RPC
 		if serverId != rf.me {
 			go rf.candidateRequestVote(serverId, &args, &voteCounter, &becomeLeader)
 		}

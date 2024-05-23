@@ -59,6 +59,7 @@ import "math/rand"
 import "time"
 import "sync/atomic"
 
+// RPC 请求结构体
 type reqMsg struct {
 	endname  interface{} // name of sending ClientEnd
 	svcMeth  string      // e.g. "Raft.AppendEntries"
@@ -81,6 +82,9 @@ type ClientEnd struct {
 // send an RPC, wait for the reply.
 // the return value indicates success; false means that
 // no reply was received from the server.
+// svcMeth RPC调用的目标函数
+// args RPC调用的参数
+// reply 接受响应的变量
 func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bool {
 	req := reqMsg{}
 	req.endname = e.endname
@@ -88,32 +92,30 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 	req.argsType = reflect.TypeOf(args)
 	req.replyCh = make(chan replyMsg)
 
-	qb := new(bytes.Buffer)
-	qe := labgob.NewEncoder(qb)
-	if err := qe.Encode(args); err != nil {
+	qb := new(bytes.Buffer)                 // 创建一个新的字节缓冲区
+	qe := labgob.NewEncoder(qb)             // 创建一个新的 LabEncoder 实例，并将编码后的数据写入 qb
+	if err := qe.Encode(args); err != nil { // 将变量编码成二进制，以方便在网上传输
 		panic(err)
 	}
-	req.args = qb.Bytes()
+	req.args = qb.Bytes() // 从缓冲区中提取已经写入的数据
 
-	//
-	// send the request.
-	//
+	// 发送请求（将数据写入通道）
 	select {
 	case e.ch <- req:
-		// the request has been sent.
+		// 请求发送成功
 	case <-e.done:
-		// entire Network has been destroyed.
+		// 整个网络崩溃了
 		return false
 	}
 
-	//
-	// wait for the reply.
-	//
+	// 等待响应（读管道数据）
 	rep := <-req.replyCh
+
+	// 响应成功
 	if rep.ok {
-		rb := bytes.NewBuffer(rep.reply)
-		rd := labgob.NewDecoder(rb)
-		if err := rd.Decode(reply); err != nil {
+		rb := bytes.NewBuffer(rep.reply)         // 创建一个字节缓冲区，并将rep.reply数据写入缓冲区
+		rd := labgob.NewDecoder(rb)              // 创建一个解码器，并指明从 rb 中读取数据
+		if err := rd.Decode(reply); err != nil { // 解码，并把数据写入 reply 中
 			log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err)
 		}
 		return true
