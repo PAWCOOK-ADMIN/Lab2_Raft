@@ -29,6 +29,7 @@ func randstring(n int) string {
 	return s[0:n]
 }
 
+// 返回一个随机数，范围0~2^62
 func makeSeed() int64 {
 	max := big.NewInt(int64(1) << 62)
 	bigx, _ := crand.Int(crand.Reader, max)
@@ -43,13 +44,13 @@ type config struct {
 	n         int
 	rafts     []*Raft
 	applyErr  []string // from apply channel readers
-	connected []bool   // whether each server is on the net
+	connected []bool   // 每个server是否在线
 	saved     []*Persister
 	endnames  [][]string            // the port file names each sends to
 	logs      []map[int]interface{} // copy of each server's committed entries
-	start     time.Time             // time at which make_config() was called
+	start     time.Time             // make_config() 被调用的时间
 	// begin()/end() statistics
-	t0        time.Time // time at which test_test.go called cfg.begin()
+	t0        time.Time // test_test.go 中 cfg.begin() 被调用的时间
 	rpcs0     int       // rpcTotal() at start of test
 	cmds0     int       // number of agreements
 	bytes0    int64
@@ -60,17 +61,17 @@ type config struct {
 var ncpu_once sync.Once
 
 func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
-	ncpu_once.Do(func() {
+	ncpu_once.Do(func() { // 执行匿名函数，并且并发场景下保证该函数只执行一次
 		if runtime.NumCPU() < 2 {
 			fmt.Printf("warning: only one CPU, which may conceal locking bugs\n")
 		}
-		rand.Seed(makeSeed())
+		rand.Seed(makeSeed()) // 设置 Go 标准库中的随机数生成器的种子，使得后续调用 math/rand 包中的随机数生成函数时可以生成基于该种子的伪随机数。
 	})
-	runtime.GOMAXPROCS(4)
+	runtime.GOMAXPROCS(4) // 设置可以同时执行的操作系统线程的最大数量
 	cfg := &config{}
 	cfg.t = t
 	cfg.net = labrpc.MakeNetwork()
-	cfg.n = n
+	cfg.n = n // server个数
 	cfg.applyErr = make([]string, cfg.n)
 	cfg.rafts = make([]*Raft, cfg.n)
 	cfg.connected = make([]bool, cfg.n)
@@ -556,10 +557,7 @@ func (cfg *config) begin(description string) {
 	cfg.maxIndex0 = cfg.maxIndex
 }
 
-// end a Test -- the fact that we got here means there
-// was no failure.
-// print the Passed message,
-// and some performance numbers.
+// end a Test -- 事实上，程序运行到此表示未发生错误。打印通过信息和一些性能数据
 func (cfg *config) end() {
 	cfg.checkTimeout()
 	if cfg.t.Failed() == false {

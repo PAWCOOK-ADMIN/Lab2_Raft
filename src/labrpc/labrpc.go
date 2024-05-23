@@ -133,7 +133,7 @@ type Network struct {
 	connections    map[interface{}]interface{} // endname -> servername
 	endCh          chan reqMsg
 	done           chan struct{} // closed when Network is cleaned up
-	count          int32         // total RPC count, for statistics
+	count          int32         // 总的 RPC 数量, for statistics
 	bytes          int64         // total bytes send, for statistics
 }
 
@@ -147,7 +147,7 @@ func MakeNetwork() *Network {
 	rn.endCh = make(chan reqMsg)
 	rn.done = make(chan struct{})
 
-	// single goroutine to handle all ClientEnd.Call()s
+	// 单个协程来处理所有的客户端调用
 	go func() {
 		for {
 			select {
@@ -189,9 +189,7 @@ func (rn *Network) LongDelays(yes bool) {
 	rn.longDelays = yes
 }
 
-func (rn *Network) readEndnameInfo(endname interface{}) (enabled bool,
-	servername interface{}, server *Server, reliable bool, longreordering bool,
-) {
+func (rn *Network) readEndnameInfo(endname interface{}) (enabled bool, servername interface{}, server *Server, reliable bool, longreordering bool) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 
@@ -215,6 +213,7 @@ func (rn *Network) isServerDead(endname interface{}, servername interface{}, ser
 	return false
 }
 
+// 处理rpc请求
 func (rn *Network) processReq(req reqMsg) {
 	enabled, servername, server, reliable, longreordering := rn.readEndnameInfo(req.endname)
 
