@@ -18,7 +18,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 func (rf *Raft) resetElectionTimer() {
 	t := time.Now()
-	electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond
+	electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond // 3-6个心跳间隔
 	rf.electionTime = t.Add(electionTimeout)
 }
 

@@ -63,9 +63,9 @@ const (
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // Raft 集群中的所有节点
-	persister *Persister          // Object to hold this peer's persisted state
+	persister *Persister          // 用于保存节点持久化信息的对象
 	me        int                 // peers[] 的下标
-	dead      int32               // 由 Kill() 函数设置
+	dead      int32               // 由 Kill() 函数设置，崩溃则值为1
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -74,7 +74,7 @@ type Raft struct {
 	state         RaftState // 节点的状态，leader、Follower、Candidate
 	appendEntryCh chan *Entry
 	heartBeat     time.Duration
-	electionTime  time.Time
+	electionTime  time.Time // 应该进行leader选举的时间
 
 	// Persistent state on all servers:
 	currentTerm int
@@ -90,7 +90,7 @@ type Raft struct {
 	matchIndex []int
 
 	applyCh   chan ApplyMsg
-	applyCond *sync.Cond
+	applyCond *sync.Cond // 条件变量
 }
 
 // 将 Raft 的持久状态保存到稳定存储中，以便在崩溃和重启后可以检索到。
@@ -208,16 +208,21 @@ func (rf *Raft) killed() bool {
 
 // ticker 以心跳为周期不断检查自己的状态，如果没有收到心跳包，则开始一个新的leader选举过程
 func (rf *Raft) ticker() {
+	// 如果节点没有崩溃，则一直执行以下循环
 	for rf.killed() == false {
 
-		// 在此处编写代码来检查是否应该启动领导者选举，并使用 time.Sleep() 来随机化睡眠时间。
+		// 睡眠一个心跳的时间
 		time.Sleep(rf.heartBeat)
 		rf.mu.Lock()
+
+		// 如果是leader，醒来后发送一个心跳包（追加条目RPC）
 		if rf.state == Leader {
-			rf.appendEntries(true) // 如果是leader，发送一个心跳包（追加条目RPC）
+			rf.appendEntries(true)
 		}
+
+		// 如果醒来后，发现此刻在应该进行选举的超时时间之后，则说明没有收到心跳包，开启新的一轮leader选举
 		if time.Now().After(rf.electionTime) {
-			rf.leaderElection() // 如果选举超时，则开启新的一轮leader选举
+			rf.leaderElection()
 		}
 		rf.mu.Unlock()
 	}
@@ -230,6 +235,7 @@ func (rf *Raft) ticker() {
 // persister 是一个用于保存这个服务器的持久状态的地方，并且最初还包含最近保存的状态（如果有的话）。
 // applyCh 是一个通道，测试者或服务期望 Raft 在这个通道上发送 ApplyMsg 消息。
 // Make 函数必须快速返回，因此应该为任何长时间运行的工作启动 goroutines。
+// 创建一个 Raft 集群的节点
 func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
@@ -240,11 +246,11 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.heartBeat = 50 * time.Millisecond
+	rf.heartBeat = 50 * time.Millisecond // 50毫秒
 	rf.resetElectionTimer()
 
-	rf.log = makeEmptyLog()
-	rf.log.append(Entry{-1, 0, 0})
+	rf.log = makeEmptyLog()        // 初始化保存日志的结构
+	rf.log.append(Entry{-1, 0, 0}) // 增加一条空日志
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
@@ -273,6 +279,7 @@ func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	// 如果节点没有崩溃，则一直执行以下循环
 	for !rf.killed() {
 		// all server rule 1
 		if rf.commitIndex > rf.lastApplied && rf.log.lastLog().Index > rf.lastApplied {
