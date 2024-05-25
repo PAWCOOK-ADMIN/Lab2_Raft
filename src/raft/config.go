@@ -22,11 +22,12 @@ import "encoding/base64"
 import "time"
 import "fmt"
 
+// 生成一个指定长度的随机字符串
 func randstring(n int) string {
 	b := make([]byte, 2*n)
-	crand.Read(b)
+	crand.Read(b) // 使用crypto/rand包生成随机字节并填充b
 	s := base64.URLEncoding.EncodeToString(b)
-	return s[0:n]
+	return s[0:n] // 返回前n个字符，作为最终的随机字符串
 }
 
 // 返回一个随机数，范围0~2^62
@@ -38,24 +39,25 @@ func makeSeed() int64 {
 }
 
 type config struct {
-	mu        sync.Mutex
-	t         *testing.T
-	net       *labrpc.Network
-	n         int
-	rafts     []*Raft
-	applyErr  []string // from apply channel readers
-	connected []bool   // 每个server是否在线
-	saved     []*Persister
-	endnames  [][]string            // the port file names each sends to
-	logs      []map[int]interface{} // copy of each server's committed entries
+	mu        sync.Mutex            // 互斥锁，用于保护并发访问
+	t         *testing.T            // 测试对象，用于记录测试状态和报告错误
+	net       *labrpc.Network       // 模拟的网络，用于连接各个 Raft 节点
+	n         int                   // Raft节点的个数
+	rafts     []*Raft               // Raft 节点的实例数组
+	applyErr  []string              // 从应用通道读取错误信息
+	connected []bool                // 每个服务器是否在线的标志数组
+	saved     []*Persister          // 每个节点的持久化状态
+	endnames  [][]string            // 所有端点的名字，比如 endnames[1][2]，表示节点1可以发数据到节点2，端点位于节点2，节点1->节点2的网络是通的
+	logs      []map[int]interface{} // 每个服务器已提交日志的副本，下标对应Raft节点的下标
 	start     time.Time             // make_config() 被调用的时间
-	// begin()/end() statistics
-	t0        time.Time // test_test.go 中 cfg.begin() 被调用的时间
-	rpcs0     int       // rpcTotal() at start of test
-	cmds0     int       // number of agreements
-	bytes0    int64
-	maxIndex  int
-	maxIndex0 int
+
+	// 统计信息
+	t0        time.Time // cfg.begin() 在 test_test.go 中被调用的时间
+	rpcs0     int       // 测试开始时的 RPC 总数
+	cmds0     int       // 测试开始时的共识数
+	bytes0    int64     // 测试开始时传输的数据量
+	maxIndex  int       // 当前测试中的最大日志索引
+	maxIndex0 int       // 测试开始时的最大日志索引
 }
 
 var ncpu_once sync.Once
@@ -80,7 +82,7 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	cfg.logs = make([]map[int]interface{}, cfg.n)
 	cfg.start = time.Now()
 
-	cfg.setunreliable(unreliable)
+	cfg.setunreliable(unreliable) // 设置网络是否可靠
 
 	cfg.net.LongDelays(true)
 
@@ -88,13 +90,14 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	if snapshot {
 		applier = cfg.applierSnap
 	}
-	// create a full set of Rafts.
+
+	// 创建Rafts集群
 	for i := 0; i < cfg.n; i++ {
 		cfg.logs[i] = map[int]interface{}{}
-		cfg.start1(i, applier)
+		cfg.start1(i, applier) // 启动raft节点
 	}
 
-	// connect everyone
+	// 节点之间进行连接
 	for i := 0; i < cfg.n; i++ {
 		cfg.connect(i)
 	}
@@ -102,18 +105,16 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	return cfg
 }
 
-// shut down a Raft server but save its persistent state.
+// 关闭一个 Raft 服务器，但保存其持久化状态。
 func (cfg *config) crash1(i int) {
-	cfg.disconnect(i)
-	cfg.net.DeleteServer(i) // disable client connections to the server.
+	cfg.disconnect(i)       // 断开服务器的连接
+	cfg.net.DeleteServer(i) // 禁止客户端连接到该服务器
 
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
 
-	// a fresh persister, in case old instance
-	// continues to update the Persister.
-	// but copy old persister's content so that we always
-	// pass Make() the last persisted state.
+	// 创建一个新的持久化器，以防旧实例继续更新持久化器。
+	// 但复制旧持久化器的内容，以便始终将最后的持久状态传递给 Make()。
 	if cfg.saved[i] != nil {
 		cfg.saved[i] = cfg.saved[i].Copy()
 	}
@@ -121,16 +122,16 @@ func (cfg *config) crash1(i int) {
 	rf := cfg.rafts[i]
 	if rf != nil {
 		cfg.mu.Unlock()
-		rf.Kill()
+		rf.Kill() // 关闭 Raft 服务器
 		cfg.mu.Lock()
-		cfg.rafts[i] = nil
+		cfg.rafts[i] = nil // 将对应的 Raft 实例设置为 nil
 	}
 
 	if cfg.saved[i] != nil {
-		raftlog := cfg.saved[i].ReadRaftState()
-		snapshot := cfg.saved[i].ReadSnapshot()
-		cfg.saved[i] = &Persister{}
-		cfg.saved[i].SaveStateAndSnapshot(raftlog, snapshot)
+		raftlog := cfg.saved[i].ReadRaftState()              // 读取 Raft 日志状态
+		snapshot := cfg.saved[i].ReadSnapshot()              // 读取快照
+		cfg.saved[i] = &Persister{}                          // 创建新的持久化器实例
+		cfg.saved[i].SaveStateAndSnapshot(raftlog, snapshot) // 保存状态和快照
 	}
 }
 
@@ -231,56 +232,54 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 }
 
-// start or re-start a Raft.
-// if one already exists, "kill" it first.
-// allocate new outgoing port file names, and a new
-// state persister, to isolate previous instance of
-// this server. since we cannot really kill it.
+// 启动或重新启动一个Raft实例。
+// 如果实例已经存在，先"杀死"它。
+// 分配新的外发端口文件名和一个新的状态持久化器，以隔离该服务器的前一个实例。
+// 因为我们实际上不能真的杀死它。
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
-	cfg.crash1(i)
+	cfg.crash1(i) // "杀死"现有的Raft实例
 
-	// a fresh set of outgoing ClientEnd names.
-	// so that old crashed instance's ClientEnds can't send.
+	// 创建一组新的外发ClientEnd名称
+	// 这样旧的崩溃实例的ClientEnd不能发送消息。
 	cfg.endnames[i] = make([]string, cfg.n)
 	for j := 0; j < cfg.n; j++ {
 		cfg.endnames[i][j] = randstring(20)
 	}
 
-	// a fresh set of ClientEnds.
+	// 创建一组新的ClientEnds
 	ends := make([]*labrpc.ClientEnd, cfg.n)
 	for j := 0; j < cfg.n; j++ {
-		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j])
-		cfg.net.Connect(cfg.endnames[i][j], j)
+		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j]) // 为每个端点创建ClientEnd
+		cfg.net.Connect(cfg.endnames[i][j], j)        // 将端点连接到对应的服务器
 	}
 
 	cfg.mu.Lock()
 
-	// a fresh persister, so old instance doesn't overwrite
-	// new instance's persisted state.
-	// but copy old persister's content so that we always
-	// pass Make() the last persisted state.
+	/// 创建一个新的持久化器，以防止旧实例覆盖新实例的持久状态。
+	// 但复制旧持久化器的内容，以便我们始终将最后的持久状态传递给Make()。
 	if cfg.saved[i] != nil {
-		cfg.saved[i] = cfg.saved[i].Copy()
+		cfg.saved[i] = cfg.saved[i].Copy() // 复制旧的持久化器内容
 	} else {
-		cfg.saved[i] = MakePersister()
+		cfg.saved[i] = MakePersister() // 创建一个新的持久化器
 	}
 
 	cfg.mu.Unlock()
 
+	// 创建一个新的通道，用于接收应用消息
 	applyCh := make(chan ApplyMsg)
 
-	rf := Make(ends, i, cfg.saved[i], applyCh)
+	rf := Make(ends, i, cfg.saved[i], applyCh) // 创建一个新的Raft实例
 
 	cfg.mu.Lock()
-	cfg.rafts[i] = rf
+	cfg.rafts[i] = rf // 将新的Raft实例存储在配置中
 	cfg.mu.Unlock()
 
-	go applier(i, applyCh)
+	go applier(i, applyCh) // 启动一个新的goroutine来处理应用消息
 
-	svc := labrpc.MakeService(rf)
-	srv := labrpc.MakeServer()
-	srv.AddService(svc)
-	cfg.net.AddServer(i, srv)
+	svc := labrpc.MakeService(rf) // 创建一个新的RPC服务
+	srv := labrpc.MakeServer()    // 创建一个新的RPC服务器
+	srv.AddService(svc)           // 将服务添加到服务器
+	cfg.net.AddServer(i, srv)     // 将服务器添加到网络中
 }
 
 func (cfg *config) checkTimeout() {
@@ -300,25 +299,26 @@ func (cfg *config) cleanup() {
 	cfg.checkTimeout()
 }
 
-// attach server i to the net.
+// 将服务器i连接到网络
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
 
+	// 标记服务器i为已连接
 	cfg.connected[i] = true
 
-	// outgoing ClientEnds
+	// 处理服务器i的外发端口
 	for j := 0; j < cfg.n; j++ {
-		if cfg.connected[j] {
-			endname := cfg.endnames[i][j]
-			cfg.net.Enable(endname, true)
+		if cfg.connected[j] { // 如果服务器j也已连接
+			endname := cfg.endnames[i][j] // 获取服务器i到服务器j的连接端口名
+			cfg.net.Enable(endname, true) // 启用该端点，使其能够进行通信
 		}
 	}
 
-	// incoming ClientEnds
+	// 处理服务器i的入站端口
 	for j := 0; j < cfg.n; j++ {
-		if cfg.connected[j] {
-			endname := cfg.endnames[j][i]
-			cfg.net.Enable(endname, true)
+		if cfg.connected[j] { // 如果服务器j也已连接
+			endname := cfg.endnames[j][i] // 获取服务器j到服务器i的连接端口名
+			cfg.net.Enable(endname, true) // 启用该端点，使其能够进行通信
 		}
 	}
 }

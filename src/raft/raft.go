@@ -62,9 +62,9 @@ const (
 // 代表raft的一个节点，即一个状态机
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // Raft 集群中的所有节点
+	peers     []*labrpc.ClientEnd // 其他Raft节点上用于接收数据的端点。即（0，1）、（0，2）、（0，3）
 	persister *Persister          // 用于保存节点持久化信息的对象
-	me        int                 // peers[] 的下标
+	me        int                 // 当前Raft节点的下标
 	dead      int32               // 由 Kill() 函数设置，崩溃则值为1
 
 	// Your data here (2A, 2B, 2C).
@@ -73,8 +73,8 @@ type Raft struct {
 
 	state         RaftState // 节点的状态，leader、Follower、Candidate
 	appendEntryCh chan *Entry
-	heartBeat     time.Duration
-	electionTime  time.Time // 应该进行leader选举的时间
+	heartBeat     time.Duration // 心跳间隔
+	electionTime  time.Time     // 应该进行leader选举的时间
 
 	// Persistent state on all servers:
 	currentTerm int

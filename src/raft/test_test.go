@@ -22,31 +22,31 @@ const RaftElectionTimeout = 1000 * time.Millisecond
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
-	defer cfg.cleanup()
+	defer cfg.cleanup() // 测试完成后清理配置
 
 	cfg.begin("Test (2A): initial election")
 
-	// is a leader elected?
+	// 检查是否选举出了一个领导者
 	cfg.checkOneLeader()
 
-	// sleep a bit to avoid racing with followers learning of the
-	// election, then check that all peers agree on the term.
+	// 为了避免与follower选举结果竞争，稍微睡眠一会儿，然后检查所有节点是否同意当前的任期
 	time.Sleep(50 * time.Millisecond)
-	term1 := cfg.checkTerms()
+	term1 := cfg.checkTerms() // 检查所有节点的任期
 	if term1 < 1 {
-		t.Fatalf("term is %v, but should be at least 1", term1)
+		t.Fatalf("term is %v, but should be at least 1", term1) // 如果任期小于1，则测试失败
 	}
 
-	// does the leader+term stay the same if there is no network failure?
+	// 如果没有网络故障，领导者和任期是否保持不变？
 	time.Sleep(2 * RaftElectionTimeout)
-	term2 := cfg.checkTerms()
+	term2 := cfg.checkTerms() // 再次检查所有节点的任期
 	if term1 != term2 {
-		fmt.Printf("warning: term changed even though there were no failures")
+		fmt.Printf("warning: term changed even though there were no failures") // 如果任期改变，打印警告
 	}
 
-	// there should still be a leader.
+	// 应该仍然有一个领导者
 	cfg.checkOneLeader()
 
+	// 结束测试
 	cfg.end()
 }
 

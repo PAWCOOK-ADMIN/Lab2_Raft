@@ -61,7 +61,7 @@ import "sync/atomic"
 
 // RPC 请求结构体
 type reqMsg struct {
-	endname  interface{} // name of sending ClientEnd
+	endname  interface{} // RPC请求的Raft节点（ClientEnd）
 	svcMeth  string      // e.g. "Raft.AppendEntries"
 	argsType reflect.Type
 	args     []byte
@@ -73,10 +73,11 @@ type replyMsg struct {
 	reply []byte
 }
 
+// ClientEnd 接收数据的端点，比如节点1，它的端点有：接收节点1数据的端点，接收节点2数据的端点，接收节点3数据的端点
 type ClientEnd struct {
-	endname interface{}   // this end-point's name
-	ch      chan reqMsg   // copy of Network.endCh
-	done    chan struct{} // closed when Network is cleaned up
+	endname interface{}   // 该端点的名称
+	ch      chan reqMsg   // 接收rpc请求的通道
+	done    chan struct{} // 当网络清理时关闭，用于通知协程停止
 }
 
 // send an RPC, wait for the reply.
@@ -126,14 +127,14 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 
 type Network struct {
 	mu             sync.Mutex
-	reliable       bool
-	longDelays     bool                        // pause a long time on send on disabled connection
+	reliable       bool                        // 网络是否可靠
+	longDelays     bool                        // 在一个不可用的连接上发送时暂停一段时间
 	longReordering bool                        // sometimes delay replies a long time
-	ends           map[interface{}]*ClientEnd  // ends, by name
-	enabled        map[interface{}]bool        // by end name
-	servers        map[interface{}]*Server     // servers, by name
-	connections    map[interface{}]interface{} // endname -> servername
-	endCh          chan reqMsg                 // 保存所有RPC请求的通道
+	ends           map[interface{}]*ClientEnd  // 网络通信中的节点，key为节点的名称，value为节点（节点名：wcOrWWIZMDAR-P22WBi3）
+	enabled        map[interface{}]bool        // 保存Raft集群中所有节点的启动状态（机器是否开启）
+	servers        map[interface{}]*Server     // 每台机器上的RPC代理，每个RPC代理中可以注册多个RPC服务
+	connections    map[interface{}]interface{} // 端点 -> 端点所属的Raft节点，即是谁的端点。如 C1sppzYPjwOIeMFGQbMd -> 1
+	endCh          chan reqMsg                 // 保存网络中所有的RPC请求
 	done           chan struct{}               // closed when Network is cleaned up
 	count          int32                       // 总的 RPC 请求数量, for statistics
 	bytes          int64                       // 总的 RPC 请求字节数, for statistics
@@ -141,13 +142,13 @@ type Network struct {
 
 func MakeNetwork() *Network {
 	rn := &Network{}
-	rn.reliable = true
-	rn.ends = map[interface{}]*ClientEnd{}
-	rn.enabled = map[interface{}]bool{}
-	rn.servers = map[interface{}]*Server{}
-	rn.connections = map[interface{}](interface{}){}
-	rn.endCh = make(chan reqMsg)
-	rn.done = make(chan struct{})
+	rn.reliable = true                               // 初始化网络为可靠
+	rn.ends = map[interface{}]*ClientEnd{}           // 初始化客户端端点映射
+	rn.enabled = map[interface{}]bool{}              // 初始化启用状态映射
+	rn.servers = map[interface{}]*Server{}           // 初始化服务器映射
+	rn.connections = map[interface{}](interface{}){} // 初始化连接映射
+	rn.endCh = make(chan reqMsg)                     // 创建请求通道
+	rn.done = make(chan struct{})                    // 创建完成信号通道
 
 	// 单个协程来处理所有的客户端调用
 	go func() {
@@ -155,9 +156,9 @@ func MakeNetwork() *Network {
 			// 多路复用，等待某个通道可读
 			select {
 			case xreq := <-rn.endCh: // 等待RPC请求
-				atomic.AddInt32(&rn.count, 1)
-				atomic.AddInt64(&rn.bytes, int64(len(xreq.args)))
-				go rn.processReq(xreq) // 处理RPC请求
+				atomic.AddInt32(&rn.count, 1)                     // 增加请求计数
+				atomic.AddInt64(&rn.bytes, int64(len(xreq.args))) // 增加字节数计数
+				go rn.processReq(xreq)                            // 处理RPC请求
 			case <-rn.done: // 如果网络崩溃
 				return
 			}
@@ -222,14 +223,14 @@ func (rn *Network) processReq(req reqMsg) {
 
 	// 如果服务器启用且服务器名和服务器实例不为空
 	if enabled && servername != nil && server != nil {
+		// 如果不可靠，增加一个短暂的延迟（0-26毫秒）
 		if reliable == false {
-			// 如果不可靠，增加一个短暂的延迟（0-26毫秒）
 			ms := (rand.Int() % 27)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
+		// 如果不可靠且有10%的概率，丢弃请求，模拟超时
 		if reliable == false && (rand.Int()%1000) < 100 {
-			// 如果不可靠且有10%的概率，丢弃请求，模拟超时
 			req.replyCh <- replyMsg{false, nil}
 			return
 		}
@@ -245,9 +246,6 @@ func (rn *Network) processReq(req reqMsg) {
 			ech <- r                  // 将结果发送到ech通道
 		}()
 
-		// wait for handler to return,
-		// but stop waiting if DeleteServer() has been called,
-		// and return an error.
 		// 等待处理程序返回，但如果DeleteServer()已被调用则停止等待，返回错误。
 		var reply replyMsg
 		replyOK := false
@@ -272,38 +270,36 @@ func (rn *Network) processReq(req reqMsg) {
 		// to an Append, but the server persisted the update
 		// into the old Persister. config.go is careful to call
 		// DeleteServer() before superseding the Persister.
+		// 如果DeleteServer()已被调用，即服务器已被杀死，则不回复。需要这样做以避免客户端在追加操作上获得正面回复，但服务器将更新保存在旧的持久存储中。
 		serverDead = rn.isServerDead(req.endname, servername, server)
 
 		if replyOK == false || serverDead == true {
-			// server was killed while we were waiting; return error.
+			// 等待期间服务器被杀死；返回错误。
 			req.replyCh <- replyMsg{false, nil}
 		} else if reliable == false && (rand.Int()%1000) < 100 {
-			// drop the reply, return as if timeout
+			// 丢弃回复，返回超时模拟
 			req.replyCh <- replyMsg{false, nil}
 		} else if longreordering == true && rand.Intn(900) < 600 {
-			// delay the response for a while
+			// 延迟响应一段时间
 			ms := 200 + rand.Intn(1+rand.Intn(2000))
-			// Russ points out that this timer arrangement will decrease
-			// the number of goroutines, so that the race
-			// detector is less likely to get upset.
+			//通过这种定时器安排减少goroutine数量，以使竞争检测器不太可能出问题
 			time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
 				atomic.AddInt64(&rn.bytes, int64(len(reply.reply)))
 				req.replyCh <- reply
 			})
 		} else {
+			// 正常回复请求
 			atomic.AddInt64(&rn.bytes, int64(len(reply.reply)))
 			req.replyCh <- reply
 		}
 	} else {
-		// simulate no reply and eventual timeout.
+		// 模拟没有回复并最终超时。
 		ms := 0
 		if rn.longDelays {
-			// let Raft tests check that leader doesn't send
-			// RPCs synchronously.
+			// 让Raft测试检查leader不会同步发送RPC。
 			ms = (rand.Int() % 7000)
 		} else {
-			// many kv tests require the client to try each
-			// server in fairly rapid succession.
+			// 许多kv测试要求客户端相对快速地尝试每个服务器。
 			ms = (rand.Int() % 100)
 		}
 		time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
@@ -384,13 +380,12 @@ func (rn *Network) GetTotalBytes() int64 {
 	return x
 }
 
-// a server is a collection of services, all sharing
-// the same rpc dispatcher. so that e.g. both a Raft
-// and a k/v server can listen to the same rpc endpoint.
+// Server 是服务的集合，共享相同的 RPC 分发器。
+// 例如，一个 Raft 和一个 k/v 服务器可以监听相同的 RPC 端点。
 type Server struct {
-	mu       sync.Mutex
-	services map[string]*Service
-	count    int // incoming RPCs
+	mu       sync.Mutex          // 互斥锁，用于保护并发访问
+	services map[string]*Service // 服务映射，键是服务名称，值是服务实例（一个机器上可以有多个RPC服务，每个服务可以有多个函数）
+	count    int                 // 记录接收到的 RPC 数量
 }
 
 func MakeServer() *Server {
@@ -438,39 +433,39 @@ func (rs *Server) GetCount() int {
 	return rs.count
 }
 
-// an object with methods that can be called via RPC.
-// a single server may have more than one Service.
+// 定义一个Service结构体，包含可以通过RPC调用的方法。
+// 一个服务器可能有多个Service。
 type Service struct {
-	name    string
-	rcvr    reflect.Value
-	typ     reflect.Type
-	methods map[string]reflect.Method
+	name    string                    // 服务名称。如 “Raft”
+	rcvr    reflect.Value             // 接收者的反射值
+	typ     reflect.Type              // 接收者的反射类型
+	methods map[string]reflect.Method // 可通过RPC调用的方法集合
 }
 
+// 创建一个新的Service实例。
 func MakeService(rcvr interface{}) *Service {
 	svc := &Service{}
-	svc.typ = reflect.TypeOf(rcvr)
-	svc.rcvr = reflect.ValueOf(rcvr)
-	svc.name = reflect.Indirect(svc.rcvr).Type().Name()
-	svc.methods = map[string]reflect.Method{}
+	svc.typ = reflect.TypeOf(rcvr)                      // 获取接收者的反射类型
+	svc.rcvr = reflect.ValueOf(rcvr)                    // 获取接收者的反射值
+	svc.name = reflect.Indirect(svc.rcvr).Type().Name() // 获取接收者的非指针类型名称
+	svc.methods = map[string]reflect.Method{}           // 初始化方法映射
 
+	// 遍历Raft结构体类型中的所有方法
 	for m := 0; m < svc.typ.NumMethod(); m++ {
-		method := svc.typ.Method(m)
-		mtype := method.Type
-		mname := method.Name
+		method := svc.typ.Method(m) // 获取方法
+		mtype := method.Type        // 获取方法的类型
+		mname := method.Name        // 获取方法的名称
 
-		//fmt.Printf("%v pp %v ni %v 1k %v 2k %v no %v\n",
-		//	mname, method.PkgPath, mtype.NumIn(), mtype.In(1).Kind(), mtype.In(2).Kind(), mtype.NumOut())
-
-		if method.PkgPath != "" || // capitalized?
-			mtype.NumIn() != 3 ||
-			//mtype.In(1).Kind() != reflect.Ptr ||
-			mtype.In(2).Kind() != reflect.Ptr ||
-			mtype.NumOut() != 0 {
-			// the method is not suitable for a handler
+		// 检查方法是否适合作为处理程序
+		// - 检查方法是否导出（首字母是否大写）
+		// - 方法必须有三个参数（接收者、请求参数、回复参数）
+		// - 第二个参数必须是指针类型
+		// - 方法不能有返回值
+		if method.PkgPath != "" || mtype.NumIn() != 3 || mtype.In(2).Kind() != reflect.Ptr || mtype.NumOut() != 0 {
+			// 方法不适合作为处理程序
 			//fmt.Printf("bad method: %v\n", mname)
 		} else {
-			// the method looks like a handler
+			// 将方法添加到方法映射中
 			svc.methods[mname] = method
 		}
 	}
