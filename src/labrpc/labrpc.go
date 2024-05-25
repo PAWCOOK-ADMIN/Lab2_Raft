@@ -133,10 +133,10 @@ type Network struct {
 	enabled        map[interface{}]bool        // by end name
 	servers        map[interface{}]*Server     // servers, by name
 	connections    map[interface{}]interface{} // endname -> servername
-	endCh          chan reqMsg
-	done           chan struct{} // closed when Network is cleaned up
-	count          int32         // 总的 RPC 数量, for statistics
-	bytes          int64         // total bytes send, for statistics
+	endCh          chan reqMsg                 // 保存所有RPC请求的通道
+	done           chan struct{}               // closed when Network is cleaned up
+	count          int32                       // 总的 RPC 请求数量, for statistics
+	bytes          int64                       // 总的 RPC 请求字节数, for statistics
 }
 
 func MakeNetwork() *Network {
@@ -152,12 +152,13 @@ func MakeNetwork() *Network {
 	// 单个协程来处理所有的客户端调用
 	go func() {
 		for {
+			// 多路复用，等待某个通道可读
 			select {
-			case xreq := <-rn.endCh:
+			case xreq := <-rn.endCh: // 等待RPC请求
 				atomic.AddInt32(&rn.count, 1)
 				atomic.AddInt64(&rn.bytes, int64(len(xreq.args)))
-				go rn.processReq(xreq)
-			case <-rn.done:
+				go rn.processReq(xreq) // 处理RPC请求
+			case <-rn.done: // 如果网络崩溃
 				return
 			}
 		}
@@ -219,15 +220,16 @@ func (rn *Network) isServerDead(endname interface{}, servername interface{}, ser
 func (rn *Network) processReq(req reqMsg) {
 	enabled, servername, server, reliable, longreordering := rn.readEndnameInfo(req.endname)
 
+	// 如果服务器启用且服务器名和服务器实例不为空
 	if enabled && servername != nil && server != nil {
 		if reliable == false {
-			// short delay
+			// 如果不可靠，增加一个短暂的延迟（0-26毫秒）
 			ms := (rand.Int() % 27)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
 		if reliable == false && (rand.Int()%1000) < 100 {
-			// drop the request, return as if timeout
+			// 如果不可靠且有10%的概率，丢弃请求，模拟超时
 			req.replyCh <- replyMsg{false, nil}
 			return
 		}
@@ -236,27 +238,29 @@ func (rn *Network) processReq(req reqMsg) {
 		// in a separate thread so that we can periodically check
 		// if the server has been killed and the RPC should get a
 		// failure reply.
+		// 在单独的goroutine中执行请求（调用RPC处理程序），以便定期检查服务器是否已被杀死，RPC应返回失败响应。
 		ech := make(chan replyMsg)
 		go func() {
-			r := server.dispatch(req)
-			ech <- r
+			r := server.dispatch(req) // 执行请求，调用服务器的dispatch方法
+			ech <- r                  // 将结果发送到ech通道
 		}()
 
 		// wait for handler to return,
 		// but stop waiting if DeleteServer() has been called,
 		// and return an error.
+		// 等待处理程序返回，但如果DeleteServer()已被调用则停止等待，返回错误。
 		var reply replyMsg
 		replyOK := false
 		serverDead := false
 		for replyOK == false && serverDead == false {
 			select {
 			case reply = <-ech:
-				replyOK = true
-			case <-time.After(100 * time.Millisecond):
+				replyOK = true // 成功接收到处理结果
+			case <-time.After(100 * time.Millisecond): // 每100毫秒检查一次服务器是否已被杀死
 				serverDead = rn.isServerDead(req.endname, servername, server)
 				if serverDead {
 					go func() {
-						<-ech // drain channel to let the goroutine created earlier terminate
+						<-ech // 排空通道，以终止前面创建的goroutine
 					}()
 				}
 			}
