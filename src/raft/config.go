@@ -72,29 +72,32 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	runtime.GOMAXPROCS(4) // 设置可以同时执行的操作系统线程的最大数量
 	cfg := &config{}
 	cfg.t = t
-	cfg.net = labrpc.MakeNetwork()
-	cfg.n = n // server个数
-	cfg.applyErr = make([]string, cfg.n)
-	cfg.rafts = make([]*Raft, cfg.n)
-	cfg.connected = make([]bool, cfg.n)
-	cfg.saved = make([]*Persister, cfg.n)
-	cfg.endnames = make([][]string, cfg.n)
-	cfg.logs = make([]map[int]interface{}, cfg.n)
-	cfg.start = time.Now()
+	cfg.net = labrpc.MakeNetwork()                // 创建一个网络对象
+	cfg.n = n                                     // 设置服务器数量
+	cfg.applyErr = make([]string, cfg.n)          // 初始化 applyErr 数组
+	cfg.rafts = make([]*Raft, cfg.n)              // 初始化 Raft 实例数组
+	cfg.connected = make([]bool, cfg.n)           // 初始化连接状态数组
+	cfg.saved = make([]*Persister, cfg.n)         // 初始化持久化对象数组
+	cfg.endnames = make([][]string, cfg.n)        // 初始化端点名称数组
+	cfg.logs = make([]map[int]interface{}, cfg.n) // 初始化日志数组
+	cfg.start = time.Now()                        // 记录当前时间
 
-	cfg.setunreliable(unreliable) // 设置网络是否可靠
+	// 设置网络是否可靠
+	cfg.setunreliable(unreliable)
 
+	// 设置长延迟模式
 	cfg.net.LongDelays(true)
 
+	// 选择 applier 函数，根据是否使用快照决定使用哪一个
 	applier := cfg.applier
 	if snapshot {
 		applier = cfg.applierSnap
 	}
 
-	// 创建Rafts集群
+	// 创建并启动 Raft 集群
 	for i := 0; i < cfg.n; i++ {
 		cfg.logs[i] = map[int]interface{}{}
-		cfg.start1(i, applier) // 启动raft节点
+		cfg.start1(i, applier) // 启动 Raft 节点
 	}
 
 	// 节点之间进行连接
@@ -107,8 +110,8 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 
 // 关闭一个 Raft 服务器，但保存其持久化状态。
 func (cfg *config) crash1(i int) {
-	cfg.disconnect(i)       // 断开服务器的连接
-	cfg.net.DeleteServer(i) // 禁止客户端连接到该服务器
+	cfg.disconnect(i)       // 断开服务器的连接，即端点关闭
+	cfg.net.DeleteServer(i) // 删除掉节点，即其上RPC方法变得不可调用
 
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -154,24 +157,27 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	return err_msg, prevok
 }
 
-// applier reads message from apply ch and checks that they match the log
-// contents
+// applier 从 applyCh 读取消息，并检查它们是否与日志内容匹配
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
 		if m.CommandValid == false {
-			// ignore other types of ApplyMsg
+			// 忽略其他类型的 ApplyMsg
 		} else {
+			// 加锁以检查日志内容
 			cfg.mu.Lock()
 			err_msg, prevok := cfg.checkLogs(i, m)
 			cfg.mu.Unlock()
+
+			// 检查提交的命令索引是否按顺序
 			if m.CommandIndex > 1 && prevok == false {
-				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
+				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex) // 如果不是按顺序提交，生成错误信息
 			}
+
+			// 如果有错误信息，记录错误并继续读取
 			if err_msg != "" {
 				log.Fatalf("apply error: %v\n", err_msg)
 				cfg.applyErr[i] = err_msg
-				// keep reading after error so that Raft doesn't block
-				// holding locks...
+				// 在出错后继续读取消息，以防止 Raft 阻塞并持有锁
 			}
 		}
 	}
@@ -246,11 +252,11 @@ func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 		cfg.endnames[i][j] = randstring(20)
 	}
 
-	// 创建一组新的ClientEnds
+	// 使用ClientEnd名称创建一组新的ClientEnds实例
 	ends := make([]*labrpc.ClientEnd, cfg.n)
 	for j := 0; j < cfg.n; j++ {
 		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j]) // 为每个端点创建ClientEnd
-		cfg.net.Connect(cfg.endnames[i][j], j)        // 将端点连接到对应的服务器
+		cfg.net.Connect(cfg.endnames[i][j], j)        // 将端点绑定到对应的服务器
 	}
 
 	cfg.mu.Lock()
@@ -323,25 +329,25 @@ func (cfg *config) connect(i int) {
 	}
 }
 
-// detach server i from the net.
+// disconnect 断开服务器 i 与网络的连接。
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
 
-	cfg.connected[i] = false
+	cfg.connected[i] = false // 节点i设置为离线
 
-	// outgoing ClientEnds
+	// 处理服务器 i 的所有出站连接
 	for j := 0; j < cfg.n; j++ {
-		if cfg.endnames[i] != nil {
+		if cfg.endnames[i] != nil { // 以节点i为起点的端点
 			endname := cfg.endnames[i][j]
-			cfg.net.Enable(endname, false)
+			cfg.net.Enable(endname, false) // 关闭端点
 		}
 	}
 
-	// incoming ClientEnds
+	// 处理所有入站连接到服务器 i
 	for j := 0; j < cfg.n; j++ {
 		if cfg.endnames[j] != nil {
-			endname := cfg.endnames[j][i]
-			cfg.net.Enable(endname, false)
+			endname := cfg.endnames[j][i]  // 以节点i为终点的端点
+			cfg.net.Enable(endname, false) // 关闭端点
 		}
 	}
 }
@@ -366,54 +372,64 @@ func (cfg *config) setlongreordering(longrel bool) {
 	cfg.net.LongReordering(longrel)
 }
 
-// check that there's exactly one leader.
-// try a few times in case re-elections are needed.
+// checkOneLeader 检查是否只有一个 leader。
+// 这个函数会尝试多次以防止在 leader 重选过程中出现问题。
 func (cfg *config) checkOneLeader() int {
+	// 尝试检查 leader 多次，10 次
 	for iters := 0; iters < 10; iters++ {
+		// 随机等待 450 到 550 毫秒之间的时间
 		ms := 450 + (rand.Int63() % 100)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 
+		// 创建一个 map 来记录每个 term 对应的 leaders 列表
 		leaders := make(map[int][]int)
 		for i := 0; i < cfg.n; i++ {
-			if cfg.connected[i] {
-				if term, leader := cfg.rafts[i].GetState(); leader {
+			if cfg.connected[i] { // 仅检查已连接的节点（即在线）
+				if term, leader := cfg.rafts[i].GetState(); leader { // 获取节点的当前状态，如果是 leader，将其加入到 leaders map 中
 					leaders[term] = append(leaders[term], i)
 				}
 			}
 		}
 
+		// 变量用于追踪最后一个有 leader 的 term
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
+			// 如果一个 term 中有多个 leader，记录错误
 			if len(leaders) > 1 {
-				cfg.t.Fatalf("term %d has %d (>1) leaders", term, len(leaders))
+				cfg.t.Fatalf("term %d has %d (>1) leaders", term, len(leaders)) // Fatalf 会终止测试
 			}
+			// 更新最后一个有 leader 的 term
 			if term > lastTermWithLeader {
 				lastTermWithLeader = term
 			}
 		}
 
+		// 如果找到任何 leader，返回最后一个有 leader 的 term 的 leader
 		if len(leaders) != 0 {
 			return leaders[lastTermWithLeader][0]
 		}
 	}
+
+	// 如果没有找到 leader，记录错误并返回 -1
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
 }
 
-// check that everyone agrees on the term.
+// checkTerms 检查所有节点的任期是否相同。
+// 如果检测到不一致则立即失败。
 func (cfg *config) checkTerms() int {
 	term := -1
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
-			xterm, _ := cfg.rafts[i].GetState()
-			if term == -1 {
+			xterm, _ := cfg.rafts[i].GetState() // 获取节点的当前 term
+			if term == -1 {                     // 如果 term 尚未设置，初始化为当前节点的 term
 				term = xterm
 			} else if term != xterm {
-				cfg.t.Fatalf("servers disagree on term")
+				cfg.t.Fatalf("servers disagree on term") // 如果已经设置了 term 且当前节点的 term 不一致，测试失败
 			}
 		}
 	}
-	return term
+	return term // 所有节点的任期相同
 }
 
 // check that there's no leader

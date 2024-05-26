@@ -31,14 +31,15 @@ func TestInitialElection2A(t *testing.T) {
 
 	// 为了避免与follower选举结果竞争，稍微睡眠一会儿，然后检查所有节点是否同意当前的任期
 	time.Sleep(50 * time.Millisecond)
-	term1 := cfg.checkTerms() // 检查所有节点的任期
+	term1 := cfg.checkTerms() // 检查所有节点的任期是否相同
 	if term1 < 1 {
-		t.Fatalf("term is %v, but should be at least 1", term1) // 如果任期小于1，则测试失败
+		t.Fatalf("term is %v, but should be at least 1", term1) // 如果任期小于1，则说明所有节点都未启动，测试失败
 	}
 
-	// 如果没有网络故障，领导者和任期是否保持不变？
+	// 检查项：如果没有网络故障，领导者和任期是否保持不变？
+	// sleep 两个选举超时时间间隔后，再次检查所有节点的任期
 	time.Sleep(2 * RaftElectionTimeout)
-	term2 := cfg.checkTerms() // 再次检查所有节点的任期
+	term2 := cfg.checkTerms()
 	if term1 != term2 {
 		fmt.Printf("warning: term changed even though there were no failures") // 如果任期改变，打印警告
 	}

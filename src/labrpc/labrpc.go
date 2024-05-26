@@ -130,8 +130,8 @@ type Network struct {
 	reliable       bool                        // 网络是否可靠
 	longDelays     bool                        // 在一个不可用的连接上发送时暂停一段时间
 	longReordering bool                        // sometimes delay replies a long time
-	ends           map[interface{}]*ClientEnd  // 网络通信中的节点，key为节点的名称，value为节点（节点名：wcOrWWIZMDAR-P22WBi3）
-	enabled        map[interface{}]bool        // 保存Raft集群中所有节点的启动状态（机器是否开启）
+	ends           map[interface{}]*ClientEnd  // 网络通信中的端点，key为端点的名称，value为实例（比如，key：wcOrWWIZMDAR-P22WBi3）
+	enabled        map[interface{}]bool        // 保存Raft集群中所有端点的状态。key为端点名，value为端点是否可用
 	servers        map[interface{}]*Server     // 每台机器上的RPC代理，每个RPC代理中可以注册多个RPC服务
 	connections    map[interface{}]interface{} // 端点 -> 端点所属的Raft节点，即是谁的端点。如 C1sppzYPjwOIeMFGQbMd -> 1
 	endCh          chan reqMsg                 // 保存网络中所有的RPC请求
@@ -316,12 +316,12 @@ func (rn *Network) MakeEnd(endname interface{}) *ClientEnd {
 	defer rn.mu.Unlock()
 
 	if _, ok := rn.ends[endname]; ok {
-		log.Fatalf("MakeEnd: %v already exists\n", endname)
+		log.Fatalf("MakeEnd: %v already exists\n", endname) // 如果端点已经存在，则结束测试
 	}
 
 	e := &ClientEnd{}
 	e.endname = endname
-	e.ch = rn.endCh
+	e.ch = rn.endCh // 每个端点接收数据的通道，实际上都是Network的通道
 	e.done = rn.done
 	rn.ends[endname] = e
 	rn.enabled[endname] = false
@@ -337,6 +337,7 @@ func (rn *Network) AddServer(servername interface{}, rs *Server) {
 	rn.servers[servername] = rs
 }
 
+// 删除调用服务，其上的rpc方法变得不可调用
 func (rn *Network) DeleteServer(servername interface{}) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
@@ -344,8 +345,8 @@ func (rn *Network) DeleteServer(servername interface{}) {
 	rn.servers[servername] = nil
 }
 
-// connect a ClientEnd to a server.
-// a ClientEnd can only be connected once in its lifetime.
+// Connect 为一个Raft节点绑定上端点 ClientEnd
+// 一个端点在它的生命周期中只能被连接一次
 func (rn *Network) Connect(endname interface{}, servername interface{}) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
@@ -353,7 +354,7 @@ func (rn *Network) Connect(endname interface{}, servername interface{}) {
 	rn.connections[endname] = servername
 }
 
-// enable/disable a ClientEnd.
+// 开启或者关闭一个端点
 func (rn *Network) Enable(endname interface{}, enabled bool) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()

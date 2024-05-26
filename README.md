@@ -1,20 +1,111 @@
-本项目为 Mit6.824 分布式课程的 Lab2，参考链接：https://github.com/s09g/raft-go/tree/main。
+　　本项目为 Mit6.824 分布式课程的 Lab2，也就是实现Raft算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验：
+<ul>
+  <li style="list-style-type:none;">
+    <ul>
+      <li>Lab2A：leader 选举（leader election）、心跳（heartbeat）。</li>
+      <li>Lab2B：日志复制（Log replication）。</li>
+      <li>Lab2C：状态存储（state persistent）。</li>
+    </ul>
+  </li>
+</ul>
 
-Lab2，也就是实现Raft算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验：
 
-- Lab2A：leader 选举（leader election）、心跳（heartbeat）。
-- Lab2B：日志复制（Log replication）。
-- Lab2C：状态存储（state persistent）。
+## 前言
+
+### 1、Raft 算法介绍
+　　分布式共识算法是一种用于在分布式系统中达成一致性的方法。为了达到这个目标，Raft 主要做了两方面的事情：
+<ul>
+  <li style="list-style-type:none;">
+    <ul>
+      <li>问题分解：把共识算法分位 3 个子问题，分别是领导者选举、日志复制、安全性。</li>
+      <li>状态简化：对算法做出一些限制，减少状态数量和可能产生的变动。</li>
+    </ul>
+  </li>
+</ul>
+
+
+### 2、Raft 节点
+　　在任何时刻，每一个服务器节点都处于 leader、follower 或 candidate 这三个状态之一。   
+　　正常运行的情况下，会有一个 leader，其他全为 follower，follower 只会响应 leader 和candidate 的请求，而客户端的请求则全部由 leader 处理，即使有客户端请求了一个 follower 也会将请求重定向到 leader。candidate 代表候选人，出现在选举 leader 阶段，选举成功后 candidate 将会成为新的 leader。
+
+
+### 3、任期 term
+　　在 Raft 协议中，将时间分成了一些任意长度的时间片，称为 term（也叫任期），term 使用连续递增的编号的进行识别，如下图所示：   
+
+<div style="text-align: center;"> 
+    <img src="./pictures/term.png" title="term">
+</div> 
+
+　　任期的机制可以非常明确地标识集群的状态。并且通过任期的比较，可以帮助我们确认一台服务器历史的状态。   
+　　term 也起到了系统中逻辑时钟的作用，每一个 server 都存储了当前 term 编号，在 server 之间进行交流的时候就会带有该编号。
+
+### 4、RPC 通信
+　　server 之间的交流是通过 RPC 进行的。Raft 中有两种 RPC：
+<ul>
+  <li style="list-style-type:none;">
+    <ul>
+      <li>RequestVote RPC（请求投票）：它由 candidate 在选举期间发起，用于拉取选票</li>
+      <li>AppendEntries RPC（追加条目）：它由 leader 发起，用于复制日志或者发送心跳信号</li>
+    </ul>
+  </li>
+</ul>
 
 
 
+## 一、leader 选举
 
-## Raft的结构
+### 1.1、什么时候开启选举？
+　　心跳超时时。 Raft 内部有一种心跳机制，如果存在 leader，那么它就会周期性地向所有 follower 发送心跳，来维持自己的地位。
+如果 follower 一段时间没有收到心跳，那么它就会认为系统中没有可用的 leader 了，然后开始进行选举。<br>
+　　心跳超时存在以下几种情况：leader 故障、网络超时、Raft 集群启动时。
+
+### 1.2、leader 选举流程
+　　follower 先增加自己的当前任期号，并转换到 candidate 状态。然后投票给自己，并且并行地向集群中的其他服务器节点发送投票请求
+（RequestVote RPC）。之后 candidate 状态将可能发生如下三种变化:<br>
+　　① 它获得超过半数选票赢得了选举，成功 leader 并开始发送心跳。<br>
+　　② 其他节点赢得了选举，收到新的 leader 的心跳后，如果新 leader 的任期号不小于自己当前的任期号，那么就从 candidate 回到
+      follower 状态。<br>
+　　③ 一段时间之后没有获胜者，每个 candidate 都在一个自己的随机选举超时时间后增加任期号开始新一轮投票。
+
+
+## 二、日志复制
+　　一条日志中需要具有三个信息：① 状态机指令；② leader 的任期号；③ 日志号（日志索引）；
+### 2.1、日志一致性
+　　如果不同日志中的两个日志项具有相同的索引值和任期编号，那么这两个日志项具有相同的指令。 <br>
+　　如果不同日志中的两个日志项具有相同的索引值和任期编号，那么这两个日志项之前的所有日志项也全部相同。
+### 2.2、日志复制的过程
+　　两个步骤：① 日志复制；② 提交。<br>
+　　生成日志后（心跳、写命令），leader 并行发送追加条目 RPC 给 follower（如果丢失会重发），让它们复制该条目。follower 收到日志后开始复制，
+然后发送响应给 leader。leader 收到超过半数的复制成功消息后，开始提交，将日志更新至状态机并将结果返回客户端，而后再发送一个追加日志 RPC 触发 follower
+的日志提交。最后 follower 收到提交请求时，开始进行提交。<br>
+　　我们把本地执行指令，也就是 leader 应用日志到状态机这一步，称作提交（即执行该命令并且将执行结果返回客户端）。
+<div style="text-align: center;"> 
+    <img src="./pictures/log.png" title="term" width="600" height="235">
+</div> 
+
+
+
+## 三、实现
+
+### 3.1、labrpc.Network
+　　labrpc.Network 代表网络的抽象。<br>
+**（1）ends <br>**
+　　Network 保存了每个 Raft 节点接收数据的端点（socket 的抽象），即 ClientEnd。举个例子，节点 0 中保存了 3 个端点，
+0->0, 0->1, 0->2。每个端点中存在一个通道，往通道中写入请求，相当于往对应的节点发送请求。另外端点使用随机的字符串作为 key 来标识，如 
+wcOrWWIZMDAR-P22WBi3。<br>
+**（2）enabled <br>**
+　　Raf 集群中所有节点的启动状态，即机器是否开启。<br>
+**（3）endCh <br>**
+　　网络中传输的 RPC 请求。Netwrok 创建后会启动一个 goroutine 专门来从该通道获取请求，然后进行处理。
+
+
+### 3.2、Raft 
+　　代表 Raft 的一个节点，即状态机。
 
 ```go
 type Raft struct {
 	mu        sync.Mutex
-	peers     []*labrpc.ClientEnd
+	peers     []*labrpc.ClientEnd   // 其他Raft节点上用于接收数据的端点
 	persister *Persister
 	me        int
 	dead      int32
@@ -26,7 +117,7 @@ type Raft struct {
 
 	currentTerm int
 	votedFor    int
-	log         Log
+	log         Log    　 // 节点上的指令日志，严格按照顺序执行，则所有状态机都能达成一致
 
 	commitIndex int
 	lastApplied int
@@ -39,7 +130,31 @@ type Raft struct {
 }
 ```
 
-Raft的结构有一部分已经给出，剩下的大部分可以根据Figure 2补全。
+### checkOneLeader
+　　检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
+<div style="text-align: center;"> 
+    <img src="./pictures/checkleaderone.jpg" title="term" width="400" height="400">
+</div> 
+
+
+
+### ticker
+检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
+<div style="text-align: center;"> 
+    <img src="./pictures/ticker.jpeg" title="term" width="330" height="460">
+</div> 
+
+
+
+
+## 四、测试项
+### 4.1、TestInitialElection2A
+　　① 集群启动后，leader 选举是否成功。<br>
+　　② 网络正常的情况下，2 个选举超时时间后，集群的 term 是否会改变，leader 是否正常。
+
+
+
+
 
 ```go
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -465,13 +580,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 5. 接上条，早点写个log可视化的脚本来处理。Python写了一下，大约30多行，可以把45s左右的test过程，变成一个5分钟左右的动画，能看到每个server的append、commit等过程
 6. 论文+student guide需要反复看，所以早点把重点摘出来写成笔记放在手边。我在微信上发了中文版的翻译
 
-## Acknowledge
-+ 感谢 @chentaiyue 提出的的issue，非常细心！
 
 
+## 参考链接：
 
-
-
+- https://github.com/s09g/raft-go/tree/main
+- https://www.bilibili.com/video/BV1pr4y1b7H5/?spm_id_from=333.337.search-card.all.click&vd_source=ff9932351ef409bb94e9586a7891b82e
 
 
 

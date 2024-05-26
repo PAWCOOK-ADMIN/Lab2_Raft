@@ -40,11 +40,11 @@ import (
 // snapshots) on the applyCh, but set CommandValid to false for these
 // other uses.
 type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	CommandIndex int
+	CommandValid bool        // 表示该 ApplyMsg 是否包含一个新提交的日志条目。
+	Command      interface{} // 需要应用的命令，可以是任意类型。
+	CommandIndex int         // 该命令在日志中的索引。
 
-	// For 2D:
+	// 下面字段用于 2D 部分：
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotTerm  int
@@ -244,7 +244,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.state = Follower
-	rf.currentTerm = 0
+	rf.currentTerm = 0 // 初始化任期为 0
 	rf.votedFor = -1
 	rf.heartBeat = 50 * time.Millisecond // 50毫秒
 	rf.resetElectionTimer()
