@@ -112,8 +112,8 @@ type Raft struct {
 
 	state         RaftState
 	appendEntryCh chan *Entry
-	heartBeat     time.Duration
-	electionTime  time.Time
+	heartBeat     time.Duration    // 心跳间隔
+	electionTime  time.Time        // 选举超时时间，一个绝对时间。
 
 	currentTerm int
 	votedFor    int
@@ -130,6 +130,20 @@ type Raft struct {
 }
 ```
 
+#### Raft 节点的启动
+　　节点启动时，该函数会在多种情况下被调用，比如崩溃后重启，Raft 集群启动等。所以在启动需要先 kill 掉之前现有的节点实例。实现过程则是：① node 
+实例的状态设置为离线；② Network 保存的出站入站相关端点的状态设置为关闭；③ 删除 node 对应的 RPC 代理；<br>
+　　在新增 node 实例后，会新建两个 Goroutine，一个作为定时器，周期性的触发心跳或者开启一个新的 leader 选举周期。另一个用于监听日志提交的 RPC
+请求，并进行提交。<br>
+　　最后还会为每个 node 创建一个 RPC 代理，用来接收并处理来自其他节点的 RPC 请求。
+
+<div style="text-align: center;"> 
+    <img src="./pictures/node_start.jpeg" title="term" width="900" height="590">
+</div> 
+
+
+
+
 ### checkOneLeader
 　　检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
 <div style="text-align: center;"> 
@@ -139,10 +153,19 @@ type Raft struct {
 
 
 ### ticker
-检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
+　　每个 Raft 节点启动后，都会新建一个 Goroutine 来启动自己的定时器。如果是节点是 leader，则定时用来发送心跳包。否则，
+判断是否应该开启新一轮的 leader 选举。
 <div style="text-align: center;"> 
-    <img src="./pictures/ticker.jpeg" title="term" width="330" height="460">
+    <img src="./pictures/ticker.jpeg" title="term" width="320" height="470">
 </div> 
+
+### leader 选举
+
+
+<div style="text-align: center;"> 
+    <img src="./pictures/leader_select.jpeg" title="term" width="900" height="830">
+</div> 
+
 
 
 
