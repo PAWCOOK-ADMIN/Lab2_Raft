@@ -9,6 +9,8 @@
   </li>
 </ul>
 
+要求：<br>
+- 不要使用 Go 内置的 timer
 
 ## 前言
 
@@ -83,9 +85,38 @@
     <img src="./pictures/log.png" title="term" width="600" height="235">
 </div> 
 
+## 三、安全性
+### 3.1、新 leader 是否提交之前任期内的日志条目
+
+<div style="text-align: center;"> 
+    <img src="./pictures/example1.png" title="term" width="340" height="210">
+</div> 
+
+　　① 假设在 c 中，S1 当选 leader 后提交了之前任期内的日志 2，而后 S1 崩溃了。<br>
+　　② 这时假设 S5 当选 leader。因为日志号和 S2，S3 相同，但任期比 S2，S3 长。同时因为日志号和任期号都比 S4 长，因此也可以收到 S2，S3，S4 的选票。<br>
+　　③ S5 当选后，发生了 follower 中的日志和新 leader 的日志不相同的情况，这时 Raft 会强制 follower 复制 leader 的日志来解决这个情况，即 S1，S2，S3，S4 
+会强制复制 S5 的日志，并把日志 2 进行覆盖。<br>
+
+　　因此，为了防止上面的情况发生，Raft 规定：<span style="color: red;">**leader 不能提交之前任期内未提交的日志**</span>。<br>
+
+**1、日志的 “幽灵复现”**<br>
+　　leader 不能提交之前任期内未提交的日志会进一步引出日志的 “幽灵复现” 问题。如下图 d1， 当 S5 当选 leader 并把 index=2 & term =3 的日志复制到了其他节点后，S5 还是不能提交该日志的。
+但如果一直没新的请求进来，该日志岂不是就一直不能提交？<br>
+
+```go
+　　一个简单的例子就是转账场景，如果第一次查询转账结果时，发现未生效而重试，而转账事务日志作为幽灵复现日志重新出现的话，就造成了用户重复转账。
+这个生效的时间如果太久，是不能够接收的。
+```
+　　所以 Raft 论文提到了引入 no-op 日志来解决这个问题。具体做法是：一个节点当选 leader 后，立刻发送一条自己当前任期的日志。这样，就可以把之前任期内满足提交条件的日志都提交了。如下图的 d2 所示。
 
 
-## 三、实现
+<div style="text-align: center;"> 
+    <img src="./pictures/example2.png" title="term" width="700" height="500">
+</div> 
+
+
+
+## 四、实现
 
 ### 3.1、labrpc.Network
 　　labrpc.Network 代表网络的抽象。<br>
@@ -161,11 +192,20 @@ type Raft struct {
 
 ### leader 选举
 
+　　启动新一轮 leader 选举时，首先要将自己转为 candidate 状态，并且给自己投一票。然后向所有其他节点请求投票。要注意当 candidate 收到半数以上投票之后就可以进入 leader 状态，而这个状态转变会更新 nextIndex[] 和  matchIndex[]，并且再成为 leader 之后要立刻发送一次心跳。我们希望状态转变只发生一次，因此这里使用了 go 的 sync.Once。<br>
+　　leader 当选后立即给其他 follower 发送一个心跳包，其目的主要有 2 个：① 维持领导者地位；② 防止出现 “幽灵复现” 问题；
 
 <div style="text-align: center;"> 
-    <img src="./pictures/leader_select.jpeg" title="term" width="900" height="830">
+    <img src="./pictures/leader_select.jpg" title="term" width="900" height="780">
 </div> 
 
+### applier
+　　applier 负责将 command 应用到状态机中。
+
+
+### Candidate 投票过程（RequestVote）
+
+　　当一个节点发现其他节点的任期更高时，则表明该节点在最近一次选举中失败，其他节点已经选出了新的领导者。此时，转变为追随者可以终止当前的选举过程，减少不必要的选举开销和冲突。
 
 
 
@@ -179,131 +219,15 @@ type Raft struct {
 
 
 
-```go
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
 
-	rf.state = Follower
-	rf.currentTerm = 0
-	rf.votedFor = -1
-	rf.heartBeat = 100 * time.Millisecond
-	rf.resetElectionTimer()
 
-	rf.log = makeEmptyLog()
-	rf.log.append(Entry{-1, 0, 0})
-	rf.commitIndex = 0
-	rf.lastApplied = 0
-	rf.nextIndex = make([]int, len(rf.peers))
-	rf.matchIndex = make([]int, len(rf.peers))
 
-	rf.applyCh = applyCh
-	rf.applyCond = sync.NewCond(&rf.mu)
 
-	rf.readPersist(persister.ReadRaftState())
 
-	go rf.ticker()
 
-	go rf.applier()
-	return rf
-}
-```
 
-初始化Raft的时候，除了给raft做基本的赋值之外，还要额外启动两个goroutine。作业要求中提到不要使用Go内置的timer，在2021版的代码里新增了一个ticker函数，作用也很简单，计时并且按时间触发leader election或者append entry。而applier则是负责将command应用到state machine，这一点和论文中一致。
 
-先看ticker()函数
 
-## ticker
-
-```go
-func (rf *Raft) ticker() {
-	for rf.killed() == false {
-		time.Sleep(rf.heartBeat)
-		rf.mu.Lock()
-		if rf.state == Leader {
-			rf.appendEntries(true)
-		}
-		if time.Now().After(rf.electionTime) {
-			rf.leaderElection()
-		}
-		rf.mu.Unlock()
-	}
-}
-```
-
-ticker会以心跳为周期不断检查状态。如果当前是Leader就会发送心跳包，而心跳包是靠appendEntries()发送空log，而不是额外的函数，这一点在论文和student guide都有强调。
-
-如果发现选举超时，这时候就会出发新一轮leader election。先看leader election的实现
-
-## leader election
-```go
-func (rf *Raft) leaderElection() {
-	rf.currentTerm++
-	rf.state = Candidate
-	rf.votedFor = rf.me
-	rf.persist()
-	rf.resetElectionTimer()
-	term := rf.currentTerm
-	voteCounter := 1
-	lastLog := rf.log.lastLog()
-	args := RequestVoteArgs{
-		Term:         term,
-		CandidateId:  rf.me,
-		LastLogIndex: lastLog.Index,
-		LastLogTerm:  lastLog.Term,
-	}
-
-	var becomeLeader sync.Once
-	for serverId, _ := range rf.peers {
-		if serverId != rf.me {
-			go rf.candidateRequestVote(serverId, &args, &voteCounter, &becomeLeader)
-		}
-	}
-}
-```
-
-启动新一轮leader election时，首先要将自己转为candidate状态，并且给自己投一票。然后向所有peer请求投票。RequestVote RPC的参数和返回值需要按照Figure 2实现。
-
-```go
-func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs,    voteCounter *int, becomeLeader *sync.Once) {
-	reply := RequestVoteReply{}
-	ok := rf.sendRequestVote(serverId, args, &reply)
-	if !ok {
-		return
-	}
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	if reply.Term > args.Term {
-		rf.setNewTerm(reply.Term)
-		return
-	}
-	if reply.Term < args.Term {
-		return
-	}
-	if !reply.VoteGranted {
-		return
-	}
-
-	*voteCounter++
-	if *voteCounter > len(rf.peers)/2 &&
-		rf.currentTerm == args.Term &&
-		rf.state == Candidate {
-		becomeLeader.Do(func() {
-			rf.state = Leader
-			lastLogIndex := rf.log.lastLog().Index
-			for i, _ := range rf.peers {
-				rf.nextIndex[i] = lastLogIndex + 1
-				rf.matchIndex[i] = 0
-			}
-			rf.appendEntries(true)
-		})
-	}
-}
-```
-除了要满足论文的Figure 2中*Rules for Servers*的要求之外，要注意当candidate收到半数以上投票之后就可以进入leader状态，而这个状态转变会更新nextIndex[]和matchIndex[]，并且再成为leader之后要立刻发送一次心跳。我们希望状态转变只发生一次，这里我使用了go的sync.Once。简单的使用bool flag也同样可以达成目的，只不过可读性没有这么直观。
 
 ## RequestVote
 
