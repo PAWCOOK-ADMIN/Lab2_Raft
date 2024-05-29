@@ -52,7 +52,7 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 	}
 }
 
-// 发送追加条目RPC（日志复制或者发送心跳）
+// 给 serverId 发送追加条目RPC（args，日志复制或者发送心跳）
 func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	var reply AppendEntriesReply
 	ok := rf.sendAppendEntries(serverId, args, &reply)
@@ -62,27 +62,29 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// 如果响应的任期大于leader节点的任期
+	// 如果响应的任期大于leader节点的任期，说明
 	if reply.Term > rf.currentTerm {
 		rf.setNewTerm(reply.Term)
 		return
 	}
 
 	if args.Term == rf.currentTerm {
-		// rules for leader 3.1
 		if reply.Success {
+			// 如果 follower 日志复制成功
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next) // 根据响应更新 nextIndex 和 matchIndex
-			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引
+			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新已复制到该服务器的最高日志条目的索引
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
+			// 如果 follower 日志复制失败
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
 			if reply.XTerm == -1 {
 				rf.nextIndex[serverId] = reply.XLen
 			} else {
 				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
 				DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
+				// 如果找到
 				if lastLogInXTerm > 0 {
 					rf.nextIndex[serverId] = lastLogInXTerm
 				} else {
@@ -92,12 +94,13 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
 		} else if rf.nextIndex[serverId] > 1 {
-			rf.nextIndex[serverId]--
+			rf.nextIndex[serverId]-- // 将 nextIndex 回退，以便重试，Raft 算法的一致性规则
 		}
 		rf.leaderCommitRule()
 	}
 }
 
+// 返回节点任期为 x 的最新的一个日志 index
 func (rf *Raft) findLastLogInTerm(x int) int {
 	for i := rf.log.lastLog().Index; i > 0; i-- {
 		term := rf.log.at(i).Term

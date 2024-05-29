@@ -105,6 +105,16 @@
     <img src="./pictures/log.png" title="term" width="600" height="235">
 </div> 
 
+### 2.3、leader 什么时候会发送追加日志 RPC 来进行日志复制？
+
+1、leader 收到客户端的命令时。<br>
+2、ader 收到客户端的命令时。<br>
+ 
+
+
+
+
+
 ## 三、安全性
 ### 3.1、新 leader 是否提交之前任期内的日志条目
 
@@ -236,17 +246,50 @@ type Raft struct {
 　　applier 负责将 command 应用到状态机中。
 
 ### 日志复制（AppendEntries）
-　　当节点收到来自 leader 追加日志 RPC 请求时，会进行如下操作：<br>
-　　① 请求的任期 < 当前节点的任期，拒绝请求。因为发送请求的节点的状态已经过时。<br>
-　　② 请求的任期 > 当前节点的任期，则更新自己的任期=请求的任期，判断是否需要更新 nextIndex[] 和 matchIndex[]。<br>
+
+**1、leader 发送追加日志 RPC 请求的流程<br>**
 
 
 
+**2、follower 收到追加日志 RPC 请求的流程<br>**
+　　① <span style="color: red;">**请求的任期 < 当前节点的任期**</span>，说明发送请求的节点的状态已经过时，拒绝请求。举例：S1 为 leader，发送了一个追加日志 RPC，由于网络延时，并在此期间 S1 崩溃了，同时选举出了新的 leader S2，此时任期已经发生变化，这时 leader S2 收到追加日志时，应该丢弃。<br>
+　　② <span style="color: red;">**请求的任期 > 当前节点的任期**</span>，说明当前节点可能时从故障崩溃中刚恢复过来，此时更新自己的任期=请求的任期，并结束返回响应。<br>
+　　③ <span style="color: red;">**请求的任期 == 当前节点的任期 && 待同步日志的上一条日志的 index > 当前节点最新日志的 index**</span>，说明当前节点没有待同步日志的上一条日志，也即日志缺失，结束并返回结果。<br>
+　　④ <span style="color: red;">**请求的任期 == 当前节点的任期 && 当前节点包含待同步日志的上一条日志 && 两个日志的 term 不同**</span>，说明在某个时间点，当前节点和领导者节点的日志发生了分叉，即两者在同一个日志索引处存储了不同的日志条目。如下图所示，S3 在同步 index 3 的日志时，发现 index 2 的日志和 S1 不一致，此时需要将本节点 index 2 的日志进行覆盖，保持和 leader 一致。
+<div style="text-align: center;"> 
+    <img src="./pictures/example5.jpg" title="term" width="140" height="110">
+</div> 
+
+　　⑤ <span style="color: red;">**请求的任期 == 当前节点的任期 && 当前节点包含待同步日志的上一条日志 && 两个日志的 term 相同**</span>，说明可以开始进行日志复制了，但还需要注意日志截断。如下图所示，S3 在同步 index 3 的日志时，上一个节点相同，但仍需要将本节点 index 3 的日志进行覆盖，从而保持和 leader 一致。
+<div style="text-align: center;"> 
+    <img src="./pictures/example6.jpg" title="term" width="140" height="110">
+</div> 
+
+　　另外，实现时并不是每个日志都使用一个追加日志 RPC 来发送，而是 leader 中会保存每个 follower 中最新的日志的 index，然后将 leader 所有 index > 保存的 index 的日志统一一起打包发送给 follower。如下图中的蓝色方块，它们将会一起被发送至 S3。
+<div style="text-align: center;"> 
+    <img src="./pictures/example7.jpg" title="term" width="140" height="100">
+</div> 
+
+**3、AppendEntriesReply<br>**
+```go
+type AppendEntriesReply struct {
+	Term     int
+	Success  bool
+	Conflict bool
+	XTerm    int
+	XIndex   int
+	XLen     int
+}
+```
+　　当 follower 发现其日志在 PrevLogIndex 位置的任期与领导者的 PrevLogTerm 不匹配时，它会将**冲突日志的任期**设置给 XTerm，同时通过 XIndex 向领导者提供其在**该冲突任期的最后一个条目的索引**。如果从节点在 PrevLogIndex 位置没有任何日志，XTerm 通常会被设置为 -1。<br>
+
+　　作用：领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突。
 
 
+- XTerm：表示冲突的日志条目的任期。
+- XIndex：表示 follower 在 XTerm 任期内的最后一个日志条目的索引。<br>
 
-
-
+- XLen：表示 follower 的日志条目总长度。<br>
 
 
 ## 四、测试项
