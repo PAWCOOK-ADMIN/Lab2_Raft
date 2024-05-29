@@ -12,10 +12,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term     int
 	Success  bool
-	Conflict bool
-	XTerm    int
-	XIndex   int
-	XLen     int
+	Conflict bool // true, 则说明日志缺失
+	XTerm    int  // 冲突日志的任期
+	XIndex   int  //
+	XLen     int  // 节点的日志长度
 }
 
 // 发送追加条目RPC，用于日志复制和发送心跳
@@ -148,7 +148,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 如果请求中的任期大于当前任期，更新当前任期并转换为跟随者
 	if args.Term > rf.currentTerm {
 		rf.setNewTerm(args.Term)
-		return
+		return // 为什么不更新超时时间再返回呢？
 	}
 
 	// 如果请求中的任期小于当前任期，直接返回
@@ -178,6 +178,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.log.at(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Conflict = true // 日志条目任期不匹配，返回冲突信息
 		xTerm := rf.log.at(args.PrevLogIndex).Term
+		// 计算出冲突的日志上一个任期的最后一条日志的索引
 		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
 			if rf.log.at(xIndex-1).Term != xTerm {
 				reply.XIndex = xIndex

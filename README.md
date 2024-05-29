@@ -235,6 +235,16 @@ type Raft struct {
 
 　　applier 负责将 command 应用到状态机中。
 
+### 日志复制（AppendEntries）
+　　当节点收到来自 leader 追加日志 RPC 请求时，会进行如下操作：<br>
+　　① 请求的任期 < 当前节点的任期，拒绝请求。因为发送请求的节点的状态已经过时。<br>
+　　② 请求的任期 > 当前节点的任期，则更新自己的任期=请求的任期，判断是否需要更新 nextIndex[] 和 matchIndex[]。<br>
+
+
+
+
+
+
 
 
 
