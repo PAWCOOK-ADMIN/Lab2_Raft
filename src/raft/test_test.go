@@ -60,27 +60,25 @@ func TestReElection2A(t *testing.T) {
 
 	leader1 := cfg.checkOneLeader()
 
-	// if the leader disconnects, a new one should be elected.
+	// 如果 leader 崩溃了，一个新的 leader 应该被选出来
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
-	// if the old leader rejoins, that shouldn't
-	// disturb the new leader.
+	// 如果旧的 leader 重新加入，不应该干扰新 leader
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
-	// if there's no quorum, no leader should
-	// be elected.
+	// 如果没有法定人数（quorum），不应该选出 leader
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
-	time.Sleep(2 * RaftElectionTimeout)
+	time.Sleep(2 * RaftElectionTimeout) // 等待两倍的选举超时时间，以确保选举过程能完全进行
 	cfg.checkNoLeader()
 
-	// if a quorum arises, it should elect a leader.
+	// 如果法定人数恢复，应该选出一个 leader
 	cfg.connect((leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
-	// re-join of last node shouldn't prevent leader from existing.
+	// 最后一个节点重新加入，不应该阻止已有 leader 的存在
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
@@ -96,9 +94,10 @@ func TestManyElections2A(t *testing.T) {
 
 	cfg.checkOneLeader()
 
+	// 设置迭代次数为10
 	iters := 10
 	for ii := 1; ii < iters; ii++ {
-		// disconnect three nodes
+		// 随机断开三个节点
 		i1 := rand.Int() % servers
 		i2 := rand.Int() % servers
 		i3 := rand.Int() % servers
@@ -106,8 +105,7 @@ func TestManyElections2A(t *testing.T) {
 		cfg.disconnect(i2)
 		cfg.disconnect(i3)
 
-		// either the current leader should still be alive,
-		// or the remaining four should elect a new one.
+		// 检查当前 leader 是否仍然存在，或者剩余的四个节点是否选出了新的 leader
 		cfg.checkOneLeader()
 
 		cfg.connect(i1)
@@ -129,12 +127,15 @@ func TestBasicAgree2B(t *testing.T) {
 
 	iters := 3
 	for index := 1; index < iters+1; index++ {
+		// 检查在Start()调用之前没有节点提交了该索引的日志条目
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
 
+		// 提交一个日志条目，内容为index*100，预期在所有服务器上达成一致
 		xindex := cfg.one(index*100, servers, false)
+		// 检查返回的日志条目的索引是否与预期的索引一致
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}

@@ -81,13 +81,13 @@ type Raft struct {
 	votedFor    int
 	log         Log // 节点上的指令日志，严格按照顺序执行，则所有状态机都能达成一致
 
-	// Volatile state on all servers:
-	commitIndex int
-	lastApplied int
+	// 所有服务器上都有的状态
+	commitIndex int // 已知被提交的最高日志条目的索引，初始值为0，并且单调递增。
+	lastApplied int // 已应用到状态机的最高日志条目的索引，初始值为0，并且单调递增。
 
-	// Volatile state on leaders:
-	nextIndex  []int //
-	matchIndex []int
+	// leader 才有的状态
+	nextIndex  []int //对于每一个服务器，要发送给该服务器的下一个日志条目的索引，初始值为领导者的最后一个日志索引加1。
+	matchIndex []int // 对于每一个服务器，已知复制到该服务器的最高日志条目的索引，初始值为0，并且单调递增。
 
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond // 条件变量
@@ -148,17 +148,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
-// agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
+// 如果这个服务器不是领导者，则返回 false。否则，开始一致性协议并立即返回。
+// 不能保证这个命令会被提交到 Raft 日志中，因为领导者可能会失败或失去选举。
+// 即使 Raft 实例已经被杀死，这个函数也应该优雅地返回。
 //
-// the first return value is the index that the command will appear at
-// if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
-// the leader.
+// 第一个返回值是成功提交日志的 index
+// 第二个返回值是当前节点的 term
+// 第三个返回值是当前节点是否是 leader
 // 接受客户端的command，并且应用在raft的算法中
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()

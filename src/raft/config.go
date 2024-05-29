@@ -444,11 +444,12 @@ func (cfg *config) checkNoLeader() {
 	}
 }
 
-// how many servers think a log entry is committed?
+// 返回提交了 index 日志的节点个数和 index 日志的命令
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	var cmd interface{} = nil
 	for i := 0; i < len(cfg.rafts); i++ {
+		// 如果该节点在应用日志时有错误，报告错误并终止测试
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
@@ -458,7 +459,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 		cfg.mu.Unlock()
 
 		if ok {
-			if count > 0 && cmd != cmd1 {
+			if count > 0 && cmd != cmd1 { // 如果已经有节点提交了该条目，并且条目内容不一致，报告错误并终止测试
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v\n",
 					index, cmd, cmd1)
 			}
@@ -466,7 +467,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cmd = cmd1
 		}
 	}
-	return count, cmd
+	return count, cmd // 返回提交该日志条目的节点数量和日志条目内容
 }
 
 // wait for at least n servers to commit.
@@ -515,8 +516,9 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	t0 := time.Now()
 	starts := 0
+	// 循环10秒钟
 	for time.Since(t0).Seconds() < 10 {
-		// try all the servers, maybe one is the leader.
+		// 尝试所有服务器，可能某个是 leader。
 		index := -1
 		for si := 0; si < cfg.n; si++ {
 			starts = (starts + 1) % cfg.n
@@ -527,29 +529,32 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
+				// 尝试在服务器上启动命令
 				index1, _, ok := rf.Start(cmd)
 				if ok {
-					index = index1
+					index = index1 // 如果是 leader 提交成功则 break
 					break
 				}
 			}
 		}
 
+		// 成功提交日志的索引
 		if index != -1 {
-			// somebody claimed to be the leader and to have
-			// submitted our command; wait a while for agreement.
+			// 有服务器声称自己是 leader 并提交了命令；等待一段时间以达成一致。
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
+				// 检查有多少节点提交了该命令
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
-					// committed
+					// 如果命令已被足够多的服务器提交
 					if cmd1 == cmd {
-						// and it was the command we submitted.
+						// 且提交的命令与我们提交的一致
 						return index
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
+			// 如果不重试，直接报告错误
 			if retry == false {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}

@@ -244,59 +244,24 @@ type Raft struct {
 　　① 集群启动后，leader 选举是否成功。<br>
 　　② 网络正常的情况下，2 个选举超时时间后，集群的 term 是否会改变，leader 是否正常。
 
+### 4.2、TestReElection2A
+　　主要测试了 leader 崩溃和重新连接的相关 case。<br>
+　　① leader 崩溃后，新 leader 的产生。<br>
+　　② 旧的 leader 重新加入，不影响新 leader 的选举（因为收到比自己任期大的 RPC 时，自身状态会变成 Follower）。<br>
+　　③ 如果有效机器数不足一半，不应该选出 leader。<br>
+　　④ 如果法定人数恢复，应该选出一个 leader。<br>
+　　⑤ 旧的 leader 重新加入，不影响 leader 的存在。<br>
+
+### 4.3、TestManyElections2A
+　　测试 Leader 选举的健壮性。即在反复的节点断开和连接过程中，集群能够持续选举出 Leader。
+
+### 4.4、TestBasicAgree2B
+　　测试 leader 在收到日志请求时，是否能够复制到 Follower 节点，而后是否能够正常提交。
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-## RequestVote
-
-另一方面，任何服务器收到RequestVote RPC之后，要实现Figure 2中*RequestVote RPC Receiver implementation*的逻辑，同时也要满足*Rules for Servers*
-
-```go
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	// rules for servers
-	// all servers 2
-	if args.Term > rf.currentTerm {
-		rf.setNewTerm(args.Term)
-	}
-
-	// request vote rpc receiver 1
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = false
-		return
-	}
-
-	// request vote rpc receiver 2
-	myLastLog := rf.log.lastLog()
-	upToDate := args.LastLogTerm > myLastLog.Term ||
-		(args.LastLogTerm == myLastLog.Term && args.LastLogIndex >= myLastLog.Index)
-	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && upToDate {
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-		rf.persist()
-		rf.resetElectionTimer()
-	} else {
-		reply.VoteGranted = false
-	}
-	reply.Term = rf.currentTerm
-}
-```
-
-论文5.2 & 5.4节详细解释了这部分逻辑的来源。
 
 ## AppendEntry
 

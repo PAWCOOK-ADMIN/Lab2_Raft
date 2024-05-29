@@ -135,40 +135,48 @@ func (rf *Raft) leaderCommitRule() {
 	}
 }
 
+// 　追加条目 RPC，日志复制
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	DPrintf("[%d]: (term %d) follower 收到 [%v] AppendEntries %v, prevIndex %v, prevTerm %v", rf.me, rf.currentTerm, args.LeaderId, args.Entries, args.PrevLogIndex, args.PrevLogTerm)
-	// rules for servers
-	// all servers 2
+
+	// 处理请求并初始化回复
 	reply.Success = false
 	reply.Term = rf.currentTerm
+
+	// 如果请求中的任期大于当前任期，更新当前任期并转换为跟随者
 	if args.Term > rf.currentTerm {
 		rf.setNewTerm(args.Term)
 		return
 	}
 
-	// append entries rpc 1
+	// 如果请求中的任期小于当前任期，直接返回
 	if args.Term < rf.currentTerm {
 		return
 	}
+
+	// 重置选举超时
 	rf.resetElectionTimer()
 
-	// candidate rule 3
+	// 如果当前节点是候选人，转换为跟随者
 	if rf.state == Candidate {
 		rf.state = Follower
 	}
-	// append entries rpc 2
+
+	// 检查日志是否与前一个日志条目匹配
 	if rf.log.lastLog().Index < args.PrevLogIndex {
-		reply.Conflict = true
+		reply.Conflict = true // 日志不匹配，返回冲突信息
 		reply.XTerm = -1
 		reply.XIndex = -1
 		reply.XLen = rf.log.len()
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		return
 	}
+
+	// 检查日志条目的任期是否匹配
 	if rf.log.at(args.PrevLogIndex).Term != args.PrevLogTerm {
-		reply.Conflict = true
+		reply.Conflict = true // 日志条目任期不匹配，返回冲突信息
 		xTerm := rf.log.at(args.PrevLogIndex).Term
 		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
 			if rf.log.at(xIndex-1).Term != xTerm {
@@ -182,13 +190,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	// 追加新条目到日志
 	for idx, entry := range args.Entries {
-		// append entries rpc 3
+		// 附加条目 RPC 规则 3：如果日志条目索引冲突，截断日志
 		if entry.Index <= rf.log.lastLog().Index && rf.log.at(entry.Index).Term != entry.Term {
 			rf.log.truncate(entry.Index)
 			rf.persist()
 		}
-		// append entries rpc 4
+		// 附加条目 RPC 规则 4：如果日志条目索引大于当前最后一个日志条目索引，追加新条目
 		if entry.Index > rf.log.lastLog().Index {
 			rf.log.append(args.Entries[idx:]...)
 			DPrintf("[%d]: follower append [%v]", rf.me, args.Entries[idx:])
@@ -197,7 +206,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
-	// append entries rpc 5
+	// 附加条目 RPC 规则 5：更新提交索引并应用
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.log.lastLog().Index)
 		rf.apply()
