@@ -142,7 +142,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
 
-	// 遍历每个节点
+	// 遍历每个节点，检查已提交日志在每个节点上是否相同
 	for j := 0; j < len(cfg.logs); j++ {
 		if old, oldok := cfg.logs[j][m.CommandIndex]; oldok && old != v { // 如果节点上 index == m.index 的命令不一样，则报错
 			log.Printf("%v: log %v; server %v\n", i, cfg.logs[i], cfg.logs[j])

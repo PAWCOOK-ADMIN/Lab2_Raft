@@ -27,9 +27,9 @@
 
 
 ### 2、Raft 节点
-　　在任何时刻，每一个服务器节点都处于 leader、follower 或 candidate 这三个状态之一。   
-　　正常运行的情况下，会有一个 leader，其他全为 follower，follower 只会响应 leader 和candidate 的请求，而客户端的请求则全部由 leader 处理，即使有客户端请求了一个 follower 也会将请求重定向到 leader。candidate 代表候选人，出现在选举 leader 阶段，选举成功后 candidate 将会成为新的 leader。
-
+　　在任何时刻，每一个服务器节点都处于 leader、follower 或 candidate 这三个状态之一。 <br>
+　　正常运行的情况下，会有一个 leader，其他全为 follower，follower 只会响应 leader 和candidate 的请求，而客户端的请求则全部由 leader 处理，即使有客户端请求了一个 follower 也会将请求重定向到 leader。candidate 代表候选人，出现在选举 leader 阶段，选举成功后 candidate 将会成为新的 leader。 <br>
+　　在 Raft 中，每个节点都维护了一个日志条目的有序序列，这些日志条目记录了系统中的操作。节点之间通过相互通信来进行日志的复制和同步，以达到一致的状态。
 
 ### 3、任期 term
 　　在 Raft 协议中，将时间分成了一些任意长度的时间片，称为 term（也叫任期），term 使用连续递增的编号的进行识别，如下图所示：   
@@ -93,8 +93,10 @@
 ## 二、日志复制
 　　一条日志中需要具有三个信息：① 状态机指令；② leader 的任期号；③ 日志号（日志索引）；
 ### 2.1、日志一致性
-　　如果不同日志中的两个日志项具有相同的索引值和任期编号，那么这两个日志项具有相同的指令。 <br>
-　　如果不同日志中的两个日志项具有相同的索引值和任期编号，那么这两个日志项之前的所有日志项也全部相同。
+- **性质 1：如果两个不同日志中的条目具有相同的索引和任期，那么它们存储相同的命令**。原因：相同任期和索引的日志只有一条，而且日志是按序复制的，故相同任期下，索引为 2 的日志是不会存在与索引为 1 的位置中。
+
+
+- **性质 2：如果两个不同日志中的条目具有相同的索引和任期，那么这些日志在所有先前的条目中都是相同的**。原因：Raft 的一致性协议保证的。
 ### 2.2、日志复制的过程
 　　两个步骤：① 日志复制；② 提交。<br>
 　　生成日志后（心跳、写命令），leader 并行发送追加条目 RPC 给 follower（如果丢失会重发），让它们复制该条目。follower 收到日志后开始复制，
@@ -148,15 +150,15 @@
 
 ## 四、实现
 
-### 3.1、labrpc.Network
+### 3.1、网络
 　　labrpc.Network 代表网络的抽象。<br>
-**（1）ends <br>**
+**1、ends <br>**
 　　Network 保存了每个 Raft 节点接收数据的端点（socket 的抽象），即 ClientEnd。举个例子，节点 0 中保存了 3 个端点，
 0->0, 0->1, 0->2。每个端点中存在一个通道，往通道中写入请求，相当于往对应的节点发送请求。另外端点使用随机的字符串作为 key 来标识，如 
 wcOrWWIZMDAR-P22WBi3。<br>
-**（2）enabled <br>**
+**2、enabled <br>**
 　　Raf 集群中所有节点的启动状态，即机器是否开启。<br>
-**（3）endCh <br>**
+**3、endCh <br>**
 　　网络中传输的 RPC 请求。Netwrok 创建后会启动一个 goroutine 专门来从该通道获取请求，然后进行处理。
 
 
@@ -191,37 +193,23 @@ type Raft struct {
 }
 ```
 
-#### Raft 节点的启动
-　　节点启动时，该函数会在多种情况下被调用，比如崩溃后重启，Raft 集群启动等。所以在启动需要先 kill 掉之前现有的节点实例。实现过程则是：① node 
-实例的状态设置为离线；② Network 保存的出站入站相关端点的状态设置为关闭；③ 删除 node 对应的 RPC 代理；<br>
-　　在新增 node 实例后，会新建两个 Goroutine，一个作为定时器，周期性的触发心跳或者开启一个新的 leader 选举周期。另一个用于监听日志提交的 RPC
-请求，并进行提交。<br>
+#### 1、Raft 节点的启动
+　　节点的启动会在多种情况下发生，比如崩溃后重启，Raft 集群启动等。所以在启动需要先 kill 掉之前现有的节点实例。实现过程则是：① node 实例的状态设置为离线；② Network 保存的出站入站相关端点的状态设置为关闭；③ 删除 node 对应的 RPC 代理；<br>
+　　在新增 node 实例后，会新建两个 Goroutine，一个作为定时器，周期性的触发心跳或者开启一个新的 leader 选举周期。另一个用于监听日志提交的 RPC 请求，并进行提交。<br>
 　　最后还会为每个 node 创建一个 RPC 代理，用来接收并处理来自其他节点的 RPC 请求。
-
 <div style="text-align: center;"> 
     <img src="./pictures/node_start.jpeg" title="term" width="900" height="590">
 </div> 
 
 
-
-
-### checkOneLeader
-　　检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
-<div style="text-align: center;"> 
-    <img src="./pictures/checkleaderone.jpg" title="term" width="400" height="400">
-</div> 
-
-
-
-### ticker
+#### 2、定时器（ticker）
 　　每个 Raft 节点启动后，都会新建一个 Goroutine 来启动自己的定时器。如果是节点是 leader，则定时用来发送心跳包。否则，
 判断是否应该开启新一轮的 leader 选举。
 <div style="text-align: center;"> 
     <img src="./pictures/ticker.jpeg" title="term" width="320" height="470">
 </div> 
 
-### leader 选举
-
+### 3.3、leader 选举
 　　启动新一轮 leader 选举时，首先要将自己转为 candidate 状态，并且给自己投一票。然后向所有其他节点请求投票。要注意当 candidate 收到半数以上投票之后就可以进入 leader 状态，而这个状态转变会更新 nextIndex[] 和  matchIndex[]，并且再成为 leader 之后要立刻发送一次心跳。我们希望状态转变只发生一次，因此这里使用了 go 的 sync.Once。<br>
 　　leader 当选后立即给其他 follower 发送一个心跳包，其目的主要有 2 个：① 维持领导者地位；② 防止出现 “幽灵复现” 问题；
 
@@ -229,8 +217,7 @@ type Raft struct {
     <img src="./pictures/leader_select.jpg" title="term" width="900" height="780">
 </div>
 
-### Candidate 投票过程（RequestVote）
-
+### 3.4、Candidate 投票过程（RequestVote）
 　　**当一个节点收到比自己任期更大的请求投票 RPC**。说明自己的状态更旧，或者没有抢先发起 leader 选举（节点性能或者网络原因）。这时应该更新自己的任期为请求投票 RPC 的任期，将 status 设置为 Follower（表明该节点竞争 leader 失败），并比较日志的新旧程度（网速快不代表包括全部的已提交日志）。如果自己的更新，则不投票给请求投票节点，否则给其投票。<br>
 
 　　**当一个节点收到比自己任期更小的请求投票 RPC**。说明请求投票节点的状态存在问题，请求投票节点的任期自增 1 后还是小于自己，只有一种情况：请求投票节点没有实时同步集群的状态，可能是崩溃重启，或者网络延迟的问题。这时应该拒绝投票。<br>
@@ -241,17 +228,21 @@ type Raft struct {
     <img src="./pictures/example4.jpeg" title="term" width="580" height="550">
 </div> 
 
-### applier
 
-　　applier 负责将 command 应用到状态机中。
+### 3.5、日志复制（AppendEntries）
 
-### 日志复制（AppendEntries）
+#### 1、leader 发送追加日志 RPC 请求的流程
+　　leader 发送完追加日志 RPC 后，会收到来自 follower 的响应，这时的响应有如下几种情况：<br>
+　　① follower 的 term 大于 leader 的 term，说明 leader 已经过时，可能是崩溃后重启，这时需要将自己转为 follower，并更新自己的 term。<br>
+　　② follower 的 term 小于 leader 的 term，说明 follower 已经过时，此时 leader 的日志肯定是在 follower 中不存在，这时更新 leader 的 nextIndex -= 1。<br>
+　　③ follower 的 term 等于 leader 的 term，此时存在两种情况，日志复制成功和日志冲突。日志复制成功则可以更新 leader 的 nextIndex += len(本次复制的日志)。日志冲突则需要根据 follower 冲突的原因进行不同的处理，具体情况如下如所示：
 
-**1、leader 发送追加日志 RPC 请求的流程<br>**
+<div style="text-align: center;"> 
+    <img src="./pictures/example9.jpg" title="term" width="750" height="630">
+</div> 
 
 
-
-**2、follower 收到追加日志 RPC 请求的流程<br>**
+#### 2、follower 收到追加日志 RPC 请求的流程
 　　① <span style="color: red;">**请求的任期 < 当前节点的任期**</span>，说明发送请求的节点的状态已经过时，拒绝请求。举例：S1 为 leader，发送了一个追加日志 RPC，由于网络延时，并在此期间 S1 崩溃了，同时选举出了新的 leader S2，此时任期已经发生变化，这时 leader S2 收到追加日志时，应该丢弃。<br>
 　　② <span style="color: red;">**请求的任期 > 当前节点的任期**</span>，说明当前节点可能时从故障崩溃中刚恢复过来，此时更新自己的任期=请求的任期，并结束返回响应。<br>
 　　③ <span style="color: red;">**请求的任期 == 当前节点的任期 && 待同步日志的上一条日志的 index > 当前节点最新日志的 index**</span>，说明当前节点没有待同步日志的上一条日志，也即日志缺失，结束并返回结果。<br>
@@ -270,7 +261,10 @@ type Raft struct {
     <img src="./pictures/example7.jpg" title="term" width="140" height="100">
 </div> 
 
-**3、AppendEntriesReply<br>**
+#### 3、Raft 的日志一致性检查优化
+　　问题：什么是　Raft 的一致性检查？<br>
+　　答：保证 follower 日志和 leader 日志一致的手段。leader 在每一个发往 follower 的追加条目 RPC 中，会放入前一个日志条目的索引位置和任期号，如果 follower 在它的日志中找不到前一个日志，那么它就会拒绝此日志，leader 收到 follower 的拒绝后，会发送前一个日志条目，从而逐渐向前定位到 follower 第一个缺失的日志。<br>
+　　一个一个的往前找下一个应该复制给 follower 的日志是不是太慢了？所以在 follower 的拒绝响应中增加了 XTerm、XIndex 等相关字段。<span style="color: red;">领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突</span>。具体情况可见 3.5 中的第一部分。<br>
 ```go
 type AppendEntriesReply struct {
 	Term     int
@@ -282,11 +276,26 @@ type AppendEntriesReply struct {
 }
 ```
 　　当 follower 发现其日志在 PrevLogIndex 位置的任期与领导者的 PrevLogTerm 不匹配时，它会将**冲突日志的任期**设置给 XTerm，同时通过 XIndex 向领导者提供其在**该冲突任期的最后一个条目的索引**。如果从节点在 PrevLogIndex 位置没有任何日志，XTerm 通常会被设置为 -1。<br>
-
-　　作用：领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突。<br>
 　　① XTerm：表示冲突的日志条目的任期。<br> 
 　　② XIndex：表示 follower 在 XTerm 任期内的最后一个日志条目的索引。<br>
 　　③ XLen：表示 follower 的日志条目总长度。<br>
+
+### 3.6、日志提交
+　　leader 在每次复制日志到 follower 时，会在 RPC 中携带当前已经提交的日志位置（commitIndex）。如果 follower 复制成功，则会更新它的提交日志位置为 min(args.LeaderCommit, rf.log.lastLog().Index)，位置前面的日志代表已提交。问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？
+<div style="text-align: center;"> 
+    <img src="./pictures/example8.jpg" title="term" width="500" height="140">
+</div> 
+　　答：因为对于 LeaderCommit 和 lastLog().Index 存在上面两种可能，这两种可能在更新 follower 的提交位置时，都需要设置为二者的较小值。另外，因为 LeaderCommit < leader.lastLog().Index，同时日志复制后的 follower.lastLog().Index 是等于 leader.lastLog().Index 的，所以不可能出现 LeaderCommit > follower.lastLog().Index 的情况。<br>
+　　日志提交后，follower 就可以 apply 应用该日志的命令到状态机了。每个 Raft 节点在启动时都会专门启动一个 Goroutine 来专门应用日志命令到状态机中。
+
+
+
+
+### 3.7、checkOneLeader
+检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
+<div style="text-align: center;"> 
+    <img src="./pictures/checkleaderone.jpg" title="term" width="400" height="400">
+</div> 
 
 
 ## 四、测试项
@@ -577,7 +586,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 - https://github.com/s09g/raft-go/tree/main
 - https://www.bilibili.com/video/BV1pr4y1b7H5/?spm_id_from=333.337.search-card.all.click&vd_source=ff9932351ef409bb94e9586a7891b82e
-
+- https://www.bilibili.com/video/BV1CQ4y1r7qf/?spm_id_from=333.337.search-card.all.click&vd_source=ff9932351ef409bb94e9586a7891b82e
 
 
 

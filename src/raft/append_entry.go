@@ -74,22 +74,21 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 			// 如果 follower 日志复制成功
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引，为什么要使用 max 呢？因为节点可能会同时发送多个 RPC，为了防止网络延时导致的问题
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引，为什么要使用 max 呢？
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新已复制到该服务器的最高日志条目的索引
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
 			// 如果 follower 日志复制失败
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
-			if reply.XTerm == -1 { //preIndexlog 缺失
+			if reply.XTerm == -1 { //prelog 缺失
 				rf.nextIndex[serverId] = reply.XLen // 设置 nextIndex 为 follower 的日志长度
-			} else {
-				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
+			} else { //prelog 没有缺失，但是 Term 不同
+				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) //　在当前节点中寻找 prelog　的 term 最后一条日志
 				DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
-				// 如果找到
-				if lastLogInXTerm > 0 {
+				if lastLogInXTerm > 0 { // 如果找到，则设置 nextIndex
 					rf.nextIndex[serverId] = lastLogInXTerm
 				} else {
-					rf.nextIndex[serverId] = reply.XIndex
+					rf.nextIndex[serverId] = reply.XIndex // 如果没找到，则设置 nextIndex 为冲突日志的上一个 term 的最后一条日志。为什么不是 reply.XIndex + 1 呢
 				}
 			}
 
@@ -121,18 +120,18 @@ func (rf *Raft) leaderCommitRule() {
 	}
 
 	for n := rf.commitIndex + 1; n <= rf.log.lastLog().Index; n++ {
-		if rf.log.at(n).Term != rf.currentTerm {
+		if rf.log.at(n).Term != rf.currentTerm { // 不能提交之前任期内的日志条目
 			continue
 		}
 		counter := 1
 		for serverId := 0; serverId < len(rf.peers); serverId++ {
-			if serverId != rf.me && rf.matchIndex[serverId] >= n {
+			if serverId != rf.me && rf.matchIndex[serverId] >= n { // 遍历每个 follower，如果已经复制了该日志
 				counter++
 			}
-			if counter > len(rf.peers)/2 {
+			if counter > len(rf.peers)/2 { //如果复制的个数达到一半
 				rf.commitIndex = n
 				DPrintf("[%v] leader尝试提交 index %v", rf.me, rf.commitIndex)
-				rf.apply()
+				rf.apply() // 开始广播
 				break
 			}
 		}
@@ -213,7 +212,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 附加条目 RPC 规则 5：更新提交索引并应用
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.log.lastLog().Index)
+		rf.commitIndex = min(args.LeaderCommit, rf.log.lastLog().Index) // 更新本节点的已提交位置
 		rf.apply()
 	}
 	reply.Success = true
