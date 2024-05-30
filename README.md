@@ -283,13 +283,10 @@ type AppendEntriesReply struct {
 ```
 　　当 follower 发现其日志在 PrevLogIndex 位置的任期与领导者的 PrevLogTerm 不匹配时，它会将**冲突日志的任期**设置给 XTerm，同时通过 XIndex 向领导者提供其在**该冲突任期的最后一个条目的索引**。如果从节点在 PrevLogIndex 位置没有任何日志，XTerm 通常会被设置为 -1。<br>
 
-　　作用：领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突。
-
-
-- XTerm：表示冲突的日志条目的任期。
-- XIndex：表示 follower 在 XTerm 任期内的最后一个日志条目的索引。<br>
-
-- XLen：表示 follower 的日志条目总长度。<br>
+　　作用：领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突。<br>
+　　① XTerm：表示冲突的日志条目的任期。<br> 
+　　② XIndex：表示 follower 在 XTerm 任期内的最后一个日志条目的索引。<br>
+　　③ XLen：表示 follower 的日志条目总长度。<br>
 
 
 ## 四、测试项

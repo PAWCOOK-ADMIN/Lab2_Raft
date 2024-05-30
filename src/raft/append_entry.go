@@ -68,19 +68,20 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 		return
 	}
 
+	// 防止在复制日志的时候崩溃的情况
 	if args.Term == rf.currentTerm {
 		if reply.Success {
 			// 如果 follower 日志复制成功
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引，为什么要使用 max 呢？因为节点可能会同时发送多个 RPC，为了防止网络延时导致的问题
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新已复制到该服务器的最高日志条目的索引
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
 			// 如果 follower 日志复制失败
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
-			if reply.XTerm == -1 {
-				rf.nextIndex[serverId] = reply.XLen
+			if reply.XTerm == -1 { //preIndexlog 缺失
+				rf.nextIndex[serverId] = reply.XLen // 设置 nextIndex 为 follower 的日志长度
 			} else {
 				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
 				DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
