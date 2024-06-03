@@ -1,16 +1,14 @@
-　　本项目为 Mit6.824 分布式课程的 Lab2，也就是实现Raft算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验：
-<ul>
-  <li style="list-style-type:none;">
-    <ul>
-      <li>Lab2A：leader 选举（leader election）、心跳（heartbeat）。</li>
-      <li>Lab2B：日志复制（Log replication）。</li>
-      <li>Lab2C：状态存储（state persistent）。</li>
-    </ul>
-  </li>
-</ul>
+　　本项目为 Mit6.824 分布式课程的 Lab2，也就是实现 Raft 算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验。<br>
+**（1）Lab2A<br>**
+　　leader 选举（leader election）、心跳（heartbeat）。<br>
+**（2）Lab2B<br>**
+　　日志复制（Log replication）。<br>
+**（3）Lab2C<br>**
+　　状态存储（state persistent）。当 currentTerm、voteFor、log[] 更新后，调用 persister 将它们持久化下来，因为这 3 个状态是要求持久化的。<br>
+　　优化 nextIndex 的回退性能。即 appendEntries 被拒时，论文默认反复减 1 回退重试，导致耗费很长时间才能找到同步位置，优化后可以一次性跳过更多的 index，减少 RPC 往复。
 
-要求：<br>
-- 不要使用 Go 内置的 timer
+
+
 
 ## 前言
 
@@ -299,6 +297,7 @@ type Raft struct {
 #### 3、Raft 的日志一致性检查优化
 　　问题：什么是　Raft 的一致性检查？<br>
 　　答：保证 follower 日志和 leader 日志一致的手段。leader 在每一个发往 follower 的追加条目 RPC 中，会放入前一个日志条目的索引位置和任期号，如果 follower 在它的日志中找不到前一个日志，那么它就会拒绝此日志，leader 收到 follower 的拒绝后，会发送前一个日志条目，从而逐渐向前定位到 follower 第一个缺失的日志。<br>
+
 　　一个一个的往前找下一个应该复制给 follower 的日志是不是太慢了？所以在 follower 的拒绝响应中增加了 XTerm、XIndex 等相关字段。<span style="color: red;">领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突</span>。具体情况可见 3.5 中的第一部分。<br>
 ```go
 type AppendEntriesReply struct {
@@ -324,10 +323,30 @@ type AppendEntriesReply struct {
 　　日志提交后，follower 就可以 apply 应用该日志的命令到状态机了。每个 Raft 节点在启动时都会专门启动一个 Goroutine 来专门应用日志命令到状态机中。
 
 
+### 5.7、持久化
+　　目标：持久化 Raft 节点的 state，使节点重启时能够恢复数据。
+
+　　**问题：需要持久化什么？<br>**
+　　答：论文中的图 2 中进行了说明，分别是：<br>
+　　① currentTerm：当前任期，这个肯定需要持久化。<br>
+　　② voteFor：这里持久化的目的是，避免一次任期投两次票。<br>
+　　③ logs：日志，重启回复需要重新执行一次命令。<br>
+
+　　**问题：什么时候进行持久化? <br>**
+　　答：当 currentTerm，votedFor，log 发生改变时。例如：<br>
+　　① Start 函数中新增一条日志保存到状态机时。<br>
+　　② leader 选举启动时，candidate 会增加 term 号。<br>
+　　③ 收到追加日志 RPC 并确定需要将日志同步至节点中时，包含正常复制和截断两种情况。<br>
+　　④ 节点之间 term 不同时，这时 term 小的需要和 term 大的保持一致，这可能发生在 RPC 的请求和响应中。<br>
+　　⑤ 转变成 Follower，重置 voteFor 时。<br>
+　　⑥ 给节点投票时。<br>
+
+　　持久化真实的实现会在每次更改时将 Raft 的持久状态写入磁盘，并在重启后从磁盘读取状态。但因为是模拟实现，所以代码中会使用 Persister 对象（见 persister.go）来保存和恢复持久状态。具体是 Persister 的 ReadRaftState() 和 SaveRaftState() 方法。<br>
+　　调用 Raft.Make() 的用户会提供一个最初包含 Raft 最近持久化状态（如果有）的 Persister。Raft 应该从这个 Persister 初始化其状态，并在每次状态更改时使用它来保存其持久状态。
 
 
-### 5.7、checkOneLeader
-检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
+### 5.8、checkOneLeader
+　　检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
 <div style="text-align: center;"> 
     <img src="./pictures/checkleaderone.jpg" title="term" width="400" height="400">
 </div> 
@@ -393,8 +412,8 @@ type AppendEntriesReply struct {
 - https://www.bilibili.com/video/BV1pr4y1b7H5/?spm_id_from=333.337.search-card.all.click&vd_source=ff9932351ef409bb94e9586a7891b82e
 - https://www.bilibili.com/video/BV1CQ4y1r7qf/?spm_id_from=333.337.search-card.all.click&vd_source=ff9932351ef409bb94e9586a7891b82e
 - https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf
-
-
+- https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
+- https://github.com/he2121/MIT6.824-2021
 
 
 

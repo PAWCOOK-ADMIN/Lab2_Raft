@@ -93,7 +93,7 @@ type Raft struct {
 	applyCond *sync.Cond // 条件变量
 }
 
-// 将 Raft 的持久状态保存到稳定存储中，以便在崩溃和重启后可以检索到。
+// persist 将 Raft 的持久状态保存到稳定存储中，以便在崩溃和重启后使用。
 // 参见论文的图 2 以了解应该持久化的内容。
 func (rf *Raft) persist() {
 	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String()) // 打印当前节点的状态信息，主要用于调试和日志记录
@@ -108,7 +108,7 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data) // 将编码后的数据保存到稳定存储中，以便在崩溃和重启后可以恢复
 }
 
-// restore previously persisted state.
+// readPersist 从现在保存的持久化状态中恢复.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return

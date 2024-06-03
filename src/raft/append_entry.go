@@ -181,10 +181,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.log.at(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Conflict = true // 日志条目任期不匹配，返回冲突信息
 		xTerm := rf.log.at(args.PrevLogIndex).Term
-		// 计算出冲突的日志上一个任期的最后一条日志的索引
+		// 找到冲突 term 的首次出现位置
 		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
 			if rf.log.at(xIndex-1).Term != xTerm {
-				reply.XIndex = xIndex
+				reply.XIndex = xIndex // xIndex-1
 				break
 			}
 		}
