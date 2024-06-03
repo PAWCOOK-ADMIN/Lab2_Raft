@@ -144,8 +144,8 @@ func TestBasicAgree2B(t *testing.T) {
 	cfg.end()
 }
 
-// check, based on counting bytes of RPCs, that
-// each command is sent to each peer just once.
+// TestRPCBytes2B 是一个测试函数，用于检查基于 RPC 字节计数的情况，
+// 确保每个命令只被发送给每个节点一次。
 func TestRPCBytes2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -153,20 +153,24 @@ func TestRPCBytes2B(t *testing.T) {
 
 	cfg.begin("Test (2B): RPC byte count")
 
+	// 向所有服务器发送值为 99 的命令
 	cfg.one(99, servers, false)
-	bytes0 := cfg.bytesTotal()
+	bytes0 := cfg.bytesTotal() // 所有的 RPC 请求个数
 
-	iters := 10
+	iters := 10 // 测试的迭代次数
 	var sent int64 = 0
-	for index := 2; index < iters+2; index++ {
-		cmd := randstring(5000)
-		xindex := cfg.one(cmd, servers, false)
+
+	// 发送 10 次命令，看日志同步的结果是否正常，并统计发送的命令字节数
+	for index := 2; index < iters+2; index++ { //之所以是 2 开始，因为日志索引 0 是节点启动时增加的
+		cmd := randstring(5000)                // 生成一个长度为 5000 字节的随机字符串命令
+		xindex := cfg.one(cmd, servers, false) // 将命令发送到所有服务器，并返回成功提交日志的索引
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}
 		sent += int64(len(cmd))
 	}
 
+	// 获取网络中的字节总数
 	bytes1 := cfg.bytesTotal()
 	got := bytes1 - bytes0
 	expected := int64(servers) * sent
@@ -278,12 +282,13 @@ loop:
 		}
 
 		leader := cfg.checkOneLeader()
-		_, term, ok := cfg.rafts[leader].Start(1)
+		_, term, ok := cfg.rafts[leader].Start(1) // 向 leader 发送命令 1，返回日志的任期
 		if !ok {
 			// leader moved on really quickly
 			continue
 		}
 
+		// 并发向 leader 发送 5 个命令，如果返回日志的任期发生改变结束，如果成功则记录下日志的 index。
 		iters := 5
 		var wg sync.WaitGroup
 		is := make(chan int, iters)
@@ -303,8 +308,9 @@ loop:
 		}
 
 		wg.Wait()
-		close(is)
+		close(is) // 关闭管道，但是仍然可读
 
+		// 验证在所有节点上的 term 是否一致，如果 term 改变则重新尝试。
 		for j := 0; j < servers; j++ {
 			if t, _ := cfg.rafts[j].GetState(); t != term {
 				// term changed -- can't expect low RPC counts
@@ -312,10 +318,11 @@ loop:
 			}
 		}
 
+		// 收集并验证命令结果，确保所有命令都成功提交且没有遗漏。
 		failed := false
 		cmds := []int{}
 		for index := range is {
-			cmd := cfg.wait(index, servers, term)
+			cmd := cfg.wait(index, servers, term) // 等待日志提交
 			if ix, ok := cmd.(int); ok {
 				if ix == -1 {
 					// peers have moved on to later terms
@@ -330,6 +337,7 @@ loop:
 			}
 		}
 
+		// 如果并发命令的任何一个失败，则测试重试
 		if failed {
 			// avoid leaking goroutines
 			go func() {
@@ -356,6 +364,7 @@ loop:
 		break
 	}
 
+	// 如果所有重试都失败，则测试失败。
 	if !success {
 		t.Fatalf("term changed too often")
 	}
@@ -489,8 +498,10 @@ func TestCount2B(t *testing.T) {
 
 	leader := cfg.checkOneLeader()
 
+	// 获取所有节点的 RPC 调用次数（请求投票+追加日志）
 	total1 := rpcs()
 
+	// leader 选举是否合理
 	if total1 > 30 || total1 < 1 {
 		t.Fatalf("too many or few RPCs (%v) to elect initial leader\n", total1)
 	}
@@ -592,10 +603,12 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.one(11, servers, true)
 
-	// crash and re-start all
+	// 所有节点先崩溃，再重新启动
 	for i := 0; i < servers; i++ {
 		cfg.start1(i, cfg.applier)
 	}
+
+	// 所有节点先断开连接，在重新启动
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 		cfg.connect(i)
@@ -603,6 +616,7 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.one(12, servers, true)
 
+	// leader 先断开连接，再重新连接
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
 	cfg.start1(leader1, cfg.applier)
@@ -610,6 +624,7 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.one(13, servers, true)
 
+	// leader 先断开连接，复制命令，崩溃后启动，再重新连接
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
 	cfg.one(14, servers-1, true)
@@ -618,6 +633,7 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
 
+	// leader 先断开连接，复制命令，崩溃后启动，再重新连接
 	i3 := (cfg.checkOneLeader() + 1) % servers
 	cfg.disconnect(i3)
 	cfg.one(15, servers-1, true)
