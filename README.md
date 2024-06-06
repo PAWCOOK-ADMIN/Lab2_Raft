@@ -1,13 +1,13 @@
-　　本项目为 Mit6.824 分布式课程的 Lab2，也就是实现 Raft 算法，它被划分成了 Lab2A、Lab2B、Lab2C 三个实验。<br>
+　　本项目为 Mit6.824 分布式课程的 Lab2，也就是实现 Raft 算法，它被划分成了 Lab2A、Lab2B、Lab2C、Lab2D 四个实验。<br>
 **（1）Lab2A<br>**
 　　leader 选举（leader election）、心跳（heartbeat）。<br>
 **（2）Lab2B<br>**
 　　日志复制（Log replication）。<br>
 **（3）Lab2C<br>**
 　　状态存储（state persistent）。当 currentTerm、voteFor、log[] 更新后，调用 persister 将它们持久化下来，因为这 3 个状态是要求持久化的。<br>
-　　优化 nextIndex 的回退性能。即 appendEntries 被拒时，论文默认反复减 1 回退重试，导致耗费很长时间才能找到同步位置，优化后可以一次性跳过更多的 index，减少 RPC 往复。
-
-
+　　优化 nextIndex 的回退性能。即 appendEntries 被拒时，论文默认反复减 1 回退重试，导致耗费很长时间才能找到同步位置，优化后可以一次性跳过更多的 index，减少 RPC 往复。<br>
+**（4）Lab2D<br>**
+　　实现日志压缩。Raft 是基于日志复制的共识算法，对于每执行一条命令，就需要新增日志，一旦日志过长，便会拖垮服务器，因此必须实现日志压缩。
 
 
 ## 前言
@@ -119,6 +119,8 @@
 
 ## 三、日志压缩
 　　Raft 采用的是一种快照技术，每个节点在达到一定条件之后，可以把当前日志中的命令都写入自己的快照，然后就可以把已经并入快照的日志都删除了。
+
+　　如下图所示：x 的更新信息依次是 3、2、0、5。y 的更新信息依次是 1、9、7，且日志下标 1~5 的日志被 commit 了，说明这段日志对当前节点来说已经不再需要。那么我们就存取这段日志的最后存储信息当做日志，也就是 x=0，y=9，同时记录下最后的快照存储的日志下标以及其对应的任期。此时我们新的日志就只需要 6、7 未提交的部分，log 的长度也从 7 变为了 2。
 <div style="text-align: center;"> 
     <img src="./pictures/example10.png" title="term" width="330" height="210">
 </div> 
@@ -126,8 +128,11 @@
 　　last included index：快照替换的最后一个日志的索引，即图中第 5 个日志。<br>
 　　last included term：快照替换的最后一个日志的任期，即图中第 5 个日志。<br>
 　　之所以快照中需要上面内容，原因是需要支持快照后第一个日志的一致性检查。因为复制该日志时需要前一个日志索引和任期。<br>
-　　一旦节点完成写入快照，它可以删除所有到 last included index 为止的日志条目，以及任何先前的快照。<br>
+
+　　一旦节点完成写入快照，它可以删除所有到 last included index 为止的日志条目，以及任何先前的快照。
+
 　　虽然服务器通常会独立地拍摄快照，但领导者偶尔必须向落后的追随者发送快照，比如老的日志被清理了，这时如何该向一个异常缓慢的 follower 或一个新加入集群的节点复制日志呢？Raft 的策略是直接向 Follower 发送自己的快照。<br>
+
 　　发送快照的是一个新类型的 RPC（InstallSnapshot），如下图所示：
 <div style="text-align: center;"> 
     <img src="./pictures/example11.png" title="term" width="450" height="600">
@@ -229,7 +234,7 @@ type Raft struct {
 　　在新增 node 实例后，会新建两个 Goroutine，一个作为定时器，周期性的触发心跳或者开启一个新的 leader 选举周期。另一个用于监听日志提交的 RPC 请求，并进行提交。<br>
 　　最后还会为每个 node 创建一个 RPC 代理，用来接收并处理来自其他节点的 RPC 请求。
 <div style="text-align: center;"> 
-    <img src="pictures/node_start.jpeg" title="term" width="1000" height="500">
+    <img src="pictures/node_start.jpeg" title="term" width="780" height="600">
 </div> 
 
 
@@ -271,7 +276,7 @@ type Raft struct {
 　　③ follower 的 term 等于 leader 的 term，此时存在两种情况，日志复制成功和日志冲突。日志复制成功则可以更新 leader 的 nextIndex += len(本次复制的日志)。日志冲突则需要根据 follower 冲突的原因进行不同的处理，具体情况如下如所示：
 
 <div style="text-align: center;"> 
-    <img src="./pictures/example9.jpg" title="term" width="750" height="630">
+    <img src="./pictures/example9.jpg" title="term" width="830" height="600">
 </div> 
 
 
@@ -295,10 +300,17 @@ type Raft struct {
 </div> 
 
 #### 3、Raft 的日志一致性检查优化
-　　问题：什么是　Raft 的一致性检查？<br>
+　　**问题：什么是 Raft 的一致性检查？<br>**
 　　答：保证 follower 日志和 leader 日志一致的手段。leader 在每一个发往 follower 的追加条目 RPC 中，会放入前一个日志条目的索引位置和任期号，如果 follower 在它的日志中找不到前一个日志，那么它就会拒绝此日志，leader 收到 follower 的拒绝后，会发送前一个日志条目，从而逐渐向前定位到 follower 第一个缺失的日志。<br>
 
 　　一个一个的往前找下一个应该复制给 follower 的日志是不是太慢了？所以在 follower 的拒绝响应中增加了 XTerm、XIndex 等相关字段。<span style="color: red;">领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突</span>。具体情况可见 3.5 中的第一部分。<br>
+
+　　**优化算法逻辑如下：<br>**
+　　① 如果一个 follower 的日志中没有 prevLogIndex，那么它应该返回 XIndex = len(log) 和 XTerm = None。<br>
+　　② 如果一个 follower 的日志中有 prevLogIndex，但是对应的 term 不匹配，那么它应该返回 XTerm = log[prevLogIndex].Term，然后在它的日志中从左到右搜索第一个 term 等于 log[prevLogIndex].Term 的日志，并将其 index 设置给 XIndex。<br>
+　　③ 当 leader 收到冲突响应时，首先应在其日志中搜索 XTerm 最后一次出现的位置。如果找到了，则设置 nextIndex 为该日志之后的一个的 index。<br>
+　　④ 如果它在日志中找不到具有该 term 的条目，则应将 nextIndex 设置为 index。<br>
+
 ```go
 type AppendEntriesReply struct {
 	Term     int
@@ -309,10 +321,18 @@ type AppendEntriesReply struct {
 	XLen     int
 }
 ```
-　　当 follower 发现其日志在 PrevLogIndex 位置的任期与领导者的 PrevLogTerm 不匹配时，它会将**冲突日志的任期**设置给 XTerm，同时通过 XIndex 向领导者提供其在**该冲突任期的上一个任期的最后一个日志的索引**。如果从节点在 PrevLogIndex 位置没有任何日志，XTerm 通常会被设置为 -1。<br>
-　　① XTerm：表示冲突的日志条目的任期。<br> 
-　　② XIndex：表示 follower 在 XTerm 任期内的最后一个日志条目的索引。<br>
-　　③ XLen：表示 follower 的日志条目总长度。<br>
+
+　　**问题：为什么要返回 XTerm 呢？只有 XIndex 不可以吗？<br>**
+　　答：实际上是可以只用 XIndex 来实现优化，但加上 XTerm 优化效果更好。如下图所示：<br>
+<div style="text-align: center;"> 
+    <img src="./pictures/example12.jpg" title="term" width="260" height="90">
+</div> 
+
+　　① leader S1 发送心跳，其中 prevLogIndx 为 7，prevLogTerm 为 5。<br>
+　　② follower S2 发现日志冲突，因为它节点中 index 为 7 的日志，term 是 4。按照优化算法返回给 leader 响应是：XIndex = 0（term 为 4 的第一条日志的下标），XTerm = 4。 <br>
+　　③ 如果没有 XTerm，那么会下一次同步 nextIndex 为 0，会将 0~7 的日志全部同步。而如果有 XTerm ，根据 Raft 的日志匹配特性，下一次同步只需要传输 6~7 的日志。
+
+
 
 ### 5.6、日志提交
 　　leader 在每次复制日志到 follower 时，会在 RPC 中携带当前已经提交的日志位置（commitIndex）。如果 follower 复制成功，则会更新它的提交日志位置为 min(args.LeaderCommit, rf.log.lastLog().Index)，位置前面的日志代表已提交。问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？
@@ -414,6 +434,6 @@ type AppendEntriesReply struct {
 - https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf
 - https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
 - https://github.com/he2121/MIT6.824-2021
-
+- https://blog.csdn.net/weixin_45938441/article/details/125179308
 
 
