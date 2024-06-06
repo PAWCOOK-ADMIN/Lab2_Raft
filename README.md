@@ -270,6 +270,12 @@ type Raft struct {
 　　日志复制可以完全交给　heartbeat　周期来触发，即收到　command　后，并不立刻发送日志复制 RPC，而是等待下一个心跳。这种方法可以减少 RPC 的数量，但是代价就是每条 command 的提交周期变长。
 
 #### 1、leader 发送追加日志 RPC 请求的流程
+（1）请求<br>
+　　如果 leader 最新的日志 index（lastLogIndex）大于或等于某个 follower 下次日志复制的起点（nextIndex），则通过一个追加日志 RPC 来发送从 nextIndex 开始的所有日志。<br>
+　　① 如果成功，则更新该 follower 的 nextIndex。<br>
+　　② 如果失败，则减少 nextIndex 并重试。<br>
+
+（2）响应<br>
 　　leader 发送完追加日志 RPC 后，会收到来自 follower 的响应，这时的响应有如下几种情况：<br>
 　　① follower 的 term 大于 leader 的 term，说明 leader 已经过时，可能是崩溃后重启，这时需要将自己转为 follower，并更新自己的 term。<br>
 　　② follower 的 term 小于 leader 的 term，说明 follower 已经过时，此时 leader 的日志肯定是在 follower 中不存在，这时更新 leader 的 nextIndex -= 1。<br>
@@ -335,7 +341,9 @@ type AppendEntriesReply struct {
 
 
 ### 5.6、日志提交
-　　leader 在每次复制日志到 follower 时，会在 RPC 中携带当前已经提交的日志位置（commitIndex）。如果 follower 复制成功，则会更新它的提交日志位置为 min(args.LeaderCommit, rf.log.lastLog().Index)，位置前面的日志代表已提交。问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？
+　　leader 在每次复制日志到 follower 时，会在 RPC 中携带当前已经提交的日志位置（commitIndex）。如果 follower 复制成功，则会更新它的提交日志位置为 min(args.LeaderCommit, rf.log.lastLog().Index)，位置前面的日志代表已提交。
+
+　　问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？
 <div style="text-align: center;"> 
     <img src="./pictures/example8.jpg" title="term" width="500" height="140">
 </div> 
@@ -360,6 +368,9 @@ type AppendEntriesReply struct {
 　　④ 节点之间 term 不同时，这时 term 小的需要和 term 大的保持一致，这可能发生在 RPC 的请求和响应中。<br>
 　　⑤ 转变成 Follower，重置 voteFor 时。<br>
 　　⑥ 给节点投票时。<br>
+
+　　**问题：节点重启时如何恢复？<br>**
+　　答：直接从磁盘中读取数据，赋值给节点的 currentTerm、voteFor、logs 即可。<br>
 
 　　持久化真实的实现会在每次更改时将 Raft 的持久状态写入磁盘，并在重启后从磁盘读取状态。但因为是模拟实现，所以代码中会使用 Persister 对象（见 persister.go）来保存和恢复持久状态。具体是 Persister 的 ReadRaftState() 和 SaveRaftState() 方法。<br>
 　　调用 Raft.Make() 的用户会提供一个最初包含 Raft 最近持久化状态（如果有）的 Persister。Raft 应该从这个 Persister 初始化其状态，并在每次状态更改时使用它来保存其持久状态。

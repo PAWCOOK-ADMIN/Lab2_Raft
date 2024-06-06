@@ -46,7 +46,7 @@ type config struct {
 	rafts     []*Raft               // Raft 节点的实例数组
 	applyErr  []string              // 从应用通道读取错误信息
 	connected []bool                // 每个服务器是否在线的标志数组
-	saved     []*Persister          // 每个节点的持久化状态
+	saved     []*Persister          // 保存每个节点的持久化状态，相当于磁盘
 	endnames  [][]string            // 所有端点的名字，比如 endnames[1][2]，表示节点1可以发数据到节点2，端点位于节点2，节点1->节点2的网络是通的
 	logs      []map[int]interface{} // 每个服务器已提交日志的副本，[(0->set, 1->get, 2->del),(0->set, 1->get, 2->del),(0->set, 1->get, 2->del)]
 	start     time.Time             // make_config() 被调用的时间

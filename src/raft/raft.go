@@ -59,24 +59,20 @@ const (
 	Leader              = "Leader"
 )
 
-// 代表raft的一个节点，即一个状态机
+// Raft 集群中的一个节点，即一个状态机
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // 其他Raft节点上用于接收数据的端点。即（0，1）、（0，2）、（0，3）
 	persister *Persister          // 用于保存节点持久化信息的对象
-	me        int                 // 当前Raft节点的下标
+	me        int                 // 当前 Raft 节点的下标
 	dead      int32               // 由 Kill() 函数设置，崩溃则值为1
-
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
 
 	state         RaftState // 节点的状态，leader、Follower、Candidate
 	appendEntryCh chan *Entry
 	heartBeat     time.Duration // 心跳间隔
 	electionTime  time.Time     // 应该进行leader选举的时间
 
-	// Persistent state on all servers:
+	// 所有节点都应该有的持久化状态
 	currentTerm int
 	votedFor    int
 	log         Log // 节点上的指令日志，严格按照顺序执行，则所有状态机都能达成一致
@@ -91,10 +87,13 @@ type Raft struct {
 
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond // 条件变量
+
+	// 2D中用于传入快照点
+	lastIncludeIndex int
+	lastIncludeTerm  int
 }
 
 // persist 将 Raft 的持久状态保存到稳定存储中，以便在崩溃和重启后使用。
-// 参见论文的图 2 以了解应该持久化的内容。
 func (rf *Raft) persist() {
 	DPrintVerbose("[%v]: STATE: %v", rf.me, rf.log.String()) // 打印当前节点的状态信息，主要用于调试和日志记录
 	w := new(bytes.Buffer)                                   // 创建一个字节缓冲区，用于临时存储编码后的数据
@@ -146,18 +145,59 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // 这个函数的目的是把安装到快照里的日志抛弃，并安装快照数据，同时更新快照下标，属于peers自身主动更新，与leader发送快照不冲突
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-
+	//if rf.killed() {
+	//	return
+	//}
+	//
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
+	//// 如果下标大于自身的提交，说明没被提交不能安装快照，如果自身快照点大于index说明不需要安装
+	////fmt.Println("[Snapshot] commintIndex", rf.commitIndex)
+	//if rf.lastIncludeIndex >= index || index > rf.commitIndex {
+	//	return
+	//}
+	//
+	//// 更新快照日志
+	//sLogs := make([]Entry, 0)
+	//sLogs = append(sLogs, Entry{})
+	//for i := index + 1; i <= rf.getLastIndex(); i++ {
+	//	sLogs = append(sLogs, rf.restoreLog(i))
+	//}
+	//
+	////fmt.Printf("[Snapshot-Rf(%v)]rf.commitIndex:%v,index:%v\n", rf.me, rf.commitIndex, index)
+	//// 更新快照下标/任期
+	//if index == rf.getLastIndex()+1 {
+	//	rf.lastIncludeTerm = rf.getLastTerm()
+	//} else {
+	//	rf.lastIncludeTerm = rf.restoreLogTerm(index)
+	//}
+	//
+	//rf.lastIncludeIndex = index
+	//rf.logs = sLogs
+	//
+	//// apply了快照就应该重置commitIndex、lastApplied
+	//if index > rf.commitIndex {
+	//	rf.commitIndex = index
+	//}
+	//if index > rf.lastApplied {
+	//	rf.lastApplied = index
+	//}
+	//
+	//// 持久化快照信息
+	//rf.persister.SaveStateAndSnapshot(rf.persistData(), snapshot)
 }
 
-// the service using Raft (e.g. a k/v server) wants to start
-// 如果这个服务器不是领导者，则返回 false。否则，开始一致性协议并立即返回。
-// 不能保证这个命令会被提交到 Raft 日志中，因为领导者可能会失败或失去选举。
-// 即使 Raft 实例已经被杀死，这个函数也应该优雅地返回。
-//
-// 第一个返回值是成功提交日志的 index
-// 第二个返回值是当前节点的 term
-// 第三个返回值是当前节点是否是 leader
-// 接受客户端的command，并且应用在raft的算法中
+// 获取最后的快照日志下标(代表已存储）
+func (rf *Raft) getLastIndex() int {
+	return rf.log.len() - 1 + rf.lastIncludeIndex
+}
+
+// Start
+// 作用：接受客户端的command，并且应用在 raft 集群中（复制和提交）
+// 返回值：成功提交日志的 index、当前节点的 term、当前节点是否是 leader
+// 备注：
+// - 1、只有leader才可以接收客户端命令。
+// - 2、不能保证这个命令会被提交到 Raft 日志中，因为领导者可能会失败或失去选举。
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -251,14 +291,23 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.log.append(Entry{-1, 0, 0}) // 增加一条空日志
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+
+	rf.lastIncludeIndex = 0
+	rf.lastIncludeTerm = 0
+
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 
 	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
 
-	// initialize from state persisted before a crash
+	// 从磁盘中读取持久化时写入的数据
 	rf.readPersist(persister.ReadRaftState())
+
+	// 同步快照信息
+	if rf.lastIncludeIndex > 0 {
+		rf.lastApplied = rf.lastIncludeIndex
+	}
 
 	// 启动一个定时器，开始leader选举
 	go rf.ticker()

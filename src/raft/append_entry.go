@@ -25,7 +25,7 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 	// 遍历集群中的每个节点
 	for peer, _ := range rf.peers {
 		if peer == rf.me { // 如果是当前节点
-			rf.resetElectionTimer() // 重置electionTime，并跳过
+			rf.resetElectionTimer() // 重置 electionTime，并跳过
 			continue
 		}
 		// rules for leader 3
@@ -52,7 +52,7 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 	}
 }
 
-// 给 serverId 发送追加条目RPC（args，日志复制或者发送心跳）
+// leaderSendEntries 给 serverId 发送追加条目RPC（args，日志复制或者发送心跳）
 func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	var reply AppendEntriesReply
 	ok := rf.sendAppendEntries(serverId, args, &reply)
@@ -70,15 +70,13 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 
 	// 防止在复制日志的时候崩溃的情况
 	if args.Term == rf.currentTerm {
-		if reply.Success {
-			// 如果 follower 日志复制成功
+		if reply.Success { // 如果 follower 日志复制成功
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
 			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新要发送给该服务器的下一个日志条目的索引，为什么要使用 max 呢？
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新已复制到该服务器的最高日志条目的索引
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
-			// 如果 follower 日志复制失败
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
 			if reply.XTerm == -1 { //prelog 缺失
 				rf.nextIndex[serverId] = reply.XLen // 设置 nextIndex 为 follower 的日志长度
@@ -130,8 +128,8 @@ func (rf *Raft) leaderCommitRule() {
 			}
 			if counter > len(rf.peers)/2 { //如果复制的个数达到一半
 				rf.commitIndex = n
-				DPrintf("[%v] leader尝试提交 index %v", rf.me, rf.commitIndex)
-				rf.apply() // 开始广播
+				DPrintf("[%v] leader 尝试提交 index %v", rf.me, rf.commitIndex)
+				rf.apply() // 表示命令可以执行了
 				break
 			}
 		}
