@@ -181,7 +181,23 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 
 			// 如果有错误信息，记录错误并继续读取
 			if err_msg != "" {
+				fmt.Println(fmt.Sprintf("===========================applierp_err_msg=============================="))
+				for k, n := range cfg.rafts {
+					fmt.Println("============================")
+					fmt.Println(fmt.Sprintf("node: %v", k))
+					fmt.Println(fmt.Sprintf("state: %v", n.state))
+					fmt.Println(fmt.Sprintf("term: %v", n.currentTerm))
+					fmt.Println(fmt.Sprintf("log: %v, len: %v", n.log.Entries, n.log.len()))
+					fmt.Println(fmt.Sprintf("lastlogIndex: %v", n.getLastIndex()))
+					fmt.Println(fmt.Sprintf("commitIndex: %v", n.commitIndex))
+					fmt.Println(fmt.Sprintf("lastApplied: %v", n.lastApplied))
+					fmt.Println(fmt.Sprintf("snapShotIndex: %v", n.lastIncludeIndex))
+					fmt.Println(fmt.Sprintf("snapShotTerm: %v", n.lastIncludeTerm))
+					fmt.Println(fmt.Sprintf("cfg.log: %v", len(cfg.logs[k])))
+				}
+
 				log.Fatalf("apply error: %v\n", err_msg)
+
 				cfg.applyErr[i] = err_msg
 				// 在出错后继续读取消息，以防止 Raft 阻塞并持有锁
 			}
@@ -194,24 +210,26 @@ const SnapShotInterval = 10
 // periodically snapshot raft state
 func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	lastApplied := 0
+
+	// 从applyCh通道中接收ApplyMsg消息
 	for m := range applyCh {
+		// 如果快照有效
 		if m.SnapshotValid {
 			//DPrintf("Installsnapshot %v %v\n", m.SnapshotIndex, lastApplied)
 			cfg.mu.Lock()
-			if cfg.rafts[i].CondInstallSnapshot(m.SnapshotTerm,
-				m.SnapshotIndex, m.Snapshot) {
-				cfg.logs[i] = make(map[int]interface{})
+			if cfg.rafts[i].CondInstallSnapshot(m.SnapshotTerm, m.SnapshotIndex, m.Snapshot) {
+				cfg.logs[i] = make(map[int]interface{}) // 清空日志
 				r := bytes.NewBuffer(m.Snapshot)
 				d := labgob.NewDecoder(r)
 				var v int
-				if d.Decode(&v) != nil {
+				if d.Decode(&v) != nil { // 解码错误
 					log.Fatalf("decode error\n")
 				}
 				cfg.logs[i][m.SnapshotIndex] = v
-				lastApplied = m.SnapshotIndex
+				lastApplied = m.SnapshotIndex // 更新lastApplied
 			}
 			cfg.mu.Unlock()
-		} else if m.CommandValid && m.CommandIndex > lastApplied {
+		} else if m.CommandValid && m.CommandIndex > lastApplied { // 如果命令有效且命令索引大于lastApplied
 			//DPrintf("apply %v lastApplied %v\n", m.CommandIndex, lastApplied)
 			cfg.mu.Lock()
 			err_msg, prevok := cfg.checkLogs(i, m)
@@ -220,12 +238,28 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
 			}
 			if err_msg != "" {
+				fmt.Println(fmt.Sprintf("===========================applierSnap_err_msg=============================="))
+				for k, n := range cfg.rafts {
+					fmt.Println("============================")
+					fmt.Println(fmt.Sprintf("node: %v", k))
+					fmt.Println(fmt.Sprintf("state: %v", n.state))
+					fmt.Println(fmt.Sprintf("term: %v", n.currentTerm))
+					fmt.Println(fmt.Sprintf("log: %v, len: %v", n.log.Entries, n.log.len()))
+					fmt.Println(fmt.Sprintf("lastlogIndex: %v", n.getLastIndex()))
+					fmt.Println(fmt.Sprintf("commitIndex: %v", n.commitIndex))
+					fmt.Println(fmt.Sprintf("lastApplied: %v", n.lastApplied))
+					fmt.Println(fmt.Sprintf("snapShotIndex: %v", n.lastIncludeIndex))
+					fmt.Println(fmt.Sprintf("snapShotTerm: %v", n.lastIncludeTerm))
+					fmt.Println(fmt.Sprintf("cfg.log: %v", len(cfg.logs[k])))
+				}
+
 				log.Fatalf("apply error: %v\n", err_msg)
+
 				cfg.applyErr[i] = err_msg
-				// keep reading after error so that Raft doesn't block
-				// holding locks...
+				// 在发生错误后继续读取，以防止Raft阻塞持有锁
 			}
 			lastApplied = m.CommandIndex
+			// 如果达到快照间隔，生成快照
 			if (m.CommandIndex+1)%SnapShotInterval == 0 {
 				w := new(bytes.Buffer)
 				e := labgob.NewEncoder(w)
@@ -234,10 +268,8 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				cfg.rafts[i].Snapshot(m.CommandIndex, w.Bytes())
 			}
 		} else {
-			// Ignore other types of ApplyMsg or old
-			// commands. Old command may never happen,
-			// depending on the Raft implementation, but
-			// just in case.
+			// 忽略其他类型的ApplyMsg或旧命令
+			// 旧命令可能永远不会发生，这取决于Raft实现，但以防万一
 			// DPrintf("Ignore: Index %v lastApplied %v\n", m.CommandIndex, lastApplied)
 
 		}
@@ -522,10 +554,12 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	t0 := time.Now()
 	starts := 0
+
+	var index int
 	// 循环10秒钟
 	for time.Since(t0).Seconds() < 10 {
 		// 尝试所有服务器，可能某个是 leader。
-		index := -1
+		index = -1
 		for si := 0; si < cfg.n; si++ {
 			starts = (starts + 1) % cfg.n
 			var rf *Raft
@@ -567,6 +601,24 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
+	}
+
+	fmt.Println("=============wrong===============")
+	fmt.Println("=============index: ===============", index)
+	nd, cmd1 := cfg.nCommitted(index)
+	fmt.Println("=============count: ===============", nd)
+	fmt.Println("=============expectedServers: ===============", expectedServers)
+	fmt.Println("=============cmd1: ===============", cmd1)
+	for k, n := range cfg.rafts {
+		fmt.Println("============================")
+		fmt.Println(fmt.Sprintf("node: %v", k))
+		fmt.Println(fmt.Sprintf("state: %v", n.state))
+		fmt.Println(fmt.Sprintf("term: %v", n.currentTerm))
+		fmt.Println(fmt.Sprintf("log: %v", n.log.Entries))
+		fmt.Println(fmt.Sprintf("commitIndex: %v", n.commitIndex))
+		fmt.Println(fmt.Sprintf("lastApplied: %v", n.lastApplied))
+		fmt.Println(fmt.Sprintf("lastIncludeIndex: %v", n.lastIncludeIndex))
+		fmt.Println(fmt.Sprintf("lastIncludeTerm: %v", n.lastIncludeTerm))
 	}
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1

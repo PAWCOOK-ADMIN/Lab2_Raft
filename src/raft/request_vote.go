@@ -142,6 +142,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, voteCo
 				rf.nextIndex[i] = lastLogIndex + 1
 				rf.matchIndex[i] = 0
 			}
+			rf.matchIndex[rf.me] = lastLogIndex
 			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
 			rf.appendEntries(true) // 成为leader后立刻发送一个心跳包
 		})

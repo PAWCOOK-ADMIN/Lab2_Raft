@@ -13,15 +13,11 @@
 ## 前言
 
 ### 1、Raft 算法介绍
-　　分布式共识算法是一种用于在分布式系统中达成一致性的方法。为了达到这个目标，Raft 主要做了两方面的事情：
-<ul>
-  <li style="list-style-type:none;">
-    <ul>
-      <li>问题分解：把共识算法分位 3 个子问题，分别是领导者选举、日志复制、安全性。</li>
-      <li>状态简化：对算法做出一些限制，减少状态数量和可能产生的变动。</li>
-    </ul>
-  </li>
-</ul>
+　　分布式共识算法是一种用于在分布式系统中达成一致性的方法。为了达到这个目标，Raft 主要做了两方面的事情：<br>
+
+　　① 问题分解：把共识算法分位 3 个子问题，分别是领导者选举、日志复制、安全性。<br>
+　　② 状态简化：对算法做出一些限制，减少状态数量和可能产生的变动。<br>
+
 
 
 ### 2、Raft 节点
@@ -30,10 +26,10 @@
 　　在 Raft 中，每个节点都维护了一个日志条目的有序序列，这些日志条目记录了系统中的操作。节点之间通过相互通信来进行日志的复制和同步，以达到一致的状态。
 
 ### 3、任期 term
-　　在 Raft 协议中，将时间分成了一些任意长度的时间片，称为 term（也叫任期），term 使用连续递增的编号的进行识别，如下图所示：   
+　　在 Raft 协议中，将时间分成了一些任意长度的时间片，称为 term（也叫任期），term 使用连续递增的编号的进行识别，如下图所示：
 
 <div style="text-align: center;"> 
-    <img src="./pictures/term.png" title="term">
+    <img src="./pictures/term.png" title="term" width="350" height="140">
 </div> 
 
 　　任期的机制可以非常明确地标识集群的状态。并且通过任期的比较，可以帮助我们确认一台服务器历史的状态。   
@@ -41,14 +37,10 @@
 
 ### 4、RPC 通信
 　　server 之间的交流是通过 RPC 进行的。Raft 中有两种 RPC：
-<ul>
-  <li style="list-style-type:none;">
-    <ul>
-      <li>RequestVote RPC（请求投票）：它由 candidate 在选举期间发起，用于拉取选票</li>
-      <li>AppendEntries RPC（追加条目）：它由 leader 发起，用于复制日志或者发送心跳信号</li>
-    </ul>
-  </li>
-</ul>
+
+　　① RequestVote RPC（请求投票）：它由 candidate 在选举期间发起，用于拉取选票。<br>
+　　② AppendEntries RPC（追加条目）：它由 leader 发起，用于复制日志或者发送心跳信号。
+
 
 
 
@@ -84,7 +76,7 @@
 　　如果 s1，s2 都崩溃了，则 leader 一定会是 s3，因为它不会投票给 s4 和 s5，包含了所有提交的日志。
 
 <div style="text-align: center;"> 
-    <img src="./pictures/example3.png" title="term" width="350" height="200">
+    <img src="./pictures/example3.png" title="term" width="330" height="190">
 </div> 
 
 　　也就是说，由于票数过半才能当选为 leader，并且只给日志比自己新的节点投票。所以 leader 只会在包含全部已提交日志的机器上产生。如果没提交，则没有影响。
@@ -103,18 +95,20 @@
 - **性质 2：如果两个不同日志中的条目具有相同的索引和任期，那么这些日志在所有先前的条目中都是相同的**。原因：Raft 的一致性协议保证的。
 ### 2.2、日志复制的过程
 　　两个步骤：① 日志复制；② 提交。<br>
-　　生成日志后（心跳、写命令），leader 并行发送追加条目 RPC 给 follower（如果丢失会重发），让它们复制该条目。follower 收到日志后开始复制，
-然后发送响应给 leader。leader 收到超过半数的复制成功消息后，开始提交，将日志更新至状态机并将结果返回客户端，而后再发送一个追加日志 RPC 触发 follower
+
+　　生成日志后（心跳、写命令），leader 并行发送追加条目 RPC 给 follower（如果丢失会重发），让它们复制该条目。follower 收到日志后开始复制，然后发送响应给 leader。leader 收到超过半数的复制成功消息后，开始提交，将日志更新至状态机并将结果返回客户端，而后再发送一个追加日志 RPC 触发 follower
 的日志提交。最后 follower 收到提交请求时，开始进行提交。<br>
+
 　　我们把本地执行指令，也就是 leader 应用日志到状态机这一步，称作提交（即执行该命令并且将执行结果返回客户端）。
+
 <div style="text-align: center;"> 
-    <img src="./pictures/log.png" title="term" width="600" height="235">
+    <img src="./pictures/log.png" title="term" width="590" height="230">
 </div> 
 
 ### 2.3、leader 什么时候会发送追加日志 RPC 来进行日志复制？
 
-1、leader 收到客户端的命令时。<br>
-2、ader 收到客户端的命令时。<br>
+　　1、leader 收到客户端的命令时。<br>
+　　2、心跳出发时。<br>
 
 
 ## 三、日志压缩
@@ -122,11 +116,11 @@
 
 　　如下图所示：x 的更新信息依次是 3、2、0、5。y 的更新信息依次是 1、9、7，且日志下标 1~5 的日志被 commit 了，说明这段日志对当前节点来说已经不再需要。那么我们就存取这段日志的最后存储信息当做日志，也就是 x=0，y=9，同时记录下最后的快照存储的日志下标以及其对应的任期。此时我们新的日志就只需要 6、7 未提交的部分，log 的长度也从 7 变为了 2。
 <div style="text-align: center;"> 
-    <img src="./pictures/example10.png" title="term" width="330" height="210">
+    <img src="./pictures/example10.png" title="term" width="330" height="200">
 </div> 
 
-　　last included index：快照替换的最后一个日志的索引，即图中第 5 个日志。<br>
-　　last included term：快照替换的最后一个日志的任期，即图中第 5 个日志。<br>
+　　**last included index**：快照替换的最后一个日志的索引，即图中第 5 个日志。<br>
+　　**last included term**：快照替换的最后一个日志的任期，即图中第 5 个日志。<br>
 　　之所以快照中需要上面内容，原因是需要支持快照后第一个日志的一致性检查。因为复制该日志时需要前一个日志索引和任期。<br>
 
 　　一旦节点完成写入快照，它可以删除所有到 last included index 为止的日志条目，以及任何先前的快照。
@@ -135,10 +129,10 @@
 
 　　发送快照的是一个新类型的 RPC（InstallSnapshot），如下图所示：
 <div style="text-align: center;"> 
-    <img src="./pictures/example11.png" title="term" width="450" height="600">
+    <img src="./pictures/example11.png" title="term" width="400" height="530">
 </div> 
 
-　　写入快照可能需要相当长的时间。因此 Raft 的实现是使用写时复制技术，即 Linux 上的 fork。
+　　写入快照可能需要相当长的时间。因此 Raft 的实现是使用写时复制技术，即 Linux 上的 fork。实际上这个 lab2D 里并不需要关注这一点。
 
 　　**问题：为什么要进行日志压缩呢？<br>**
 　　因为随着 Raft 集群的不断运行，各状态机上的 log 也在不断积累，总会有一个时间会把状态机的内存打爆，所有我们需要有一个机制来安全地清理状态机上的 log。<br>
@@ -157,7 +151,7 @@
 ### 4.1、新 leader 是否提交之前任期内的日志条目
 
 <div style="text-align: center;"> 
-    <img src="./pictures/example1.png" title="term" width="350" height="200">
+    <img src="./pictures/example1.png" title="term" width="320" height="190">
 </div> 
 
 　　① 假设在 c 中，S1 当选 leader 后提交了之前任期内的日志 2，而后 S1 崩溃了。<br>
@@ -168,6 +162,7 @@
 　　因此，为了防止上面的情况发生，Raft 规定：<span style="color: red;">**leader 不能提交之前任期内未提交的日志**</span>。<br>
 
 **1、日志的 “幽灵复现”**<br>
+
 　　leader 不能提交之前任期内未提交的日志会进一步引出日志的 “幽灵复现” 问题。如下图 d1， 当 S5 当选 leader 并把 index=2 & term =3 的日志复制到了其他节点后，S5 还是不能提交该日志的。
 但如果一直没新的请求进来，该日志岂不是就一直不能提交？<br>
 
@@ -179,7 +174,7 @@
 
 
 <div style="text-align: center;"> 
-    <img src="./pictures/example2.png" title="term" width="550" height="400">
+    <img src="./pictures/example2.png" title="term" width="500" height="370">
 </div> 
 
 
@@ -234,7 +229,7 @@ type Raft struct {
 　　在新增 node 实例后，会新建两个 Goroutine，一个作为定时器，周期性的触发心跳或者开启一个新的 leader 选举周期。另一个用于监听日志提交的 RPC 请求，并进行提交。<br>
 　　最后还会为每个 node 创建一个 RPC 代理，用来接收并处理来自其他节点的 RPC 请求。
 <div style="text-align: center;"> 
-    <img src="pictures/node_start.jpeg" title="term" width="780" height="600">
+    <img src="pictures/node_start.jpeg" title="term" width="720" height="570">
 </div> 
 
 
@@ -242,7 +237,7 @@ type Raft struct {
 　　每个 Raft 节点启动后，都会新建一个 Goroutine 来启动自己的定时器。如果是节点是 leader，则定时用来发送心跳包。否则，
 判断是否应该开启新一轮的 leader 选举。
 <div style="text-align: center;"> 
-    <img src="./pictures/ticker.jpeg" title="term" width="320" height="470">
+    <img src="./pictures/ticker.jpeg" title="term" width="280" height="450">
 </div> 
 
 
@@ -251,7 +246,7 @@ type Raft struct {
 　　leader 当选后立即给其他 follower 发送一个心跳包，其目的主要有 2 个：① 维持领导者地位；② 防止出现 “幽灵复现” 问题；
 
 <div style="text-align: center;"> 
-    <img src="./pictures/leader_select.jpg" title="term" width="900" height="780">
+    <img src="./pictures/leader_select.jpg" title="term" width="800" height="740">
 </div>
 
 ### 5.4、Candidate 投票过程（RequestVote）
@@ -262,7 +257,7 @@ type Raft struct {
 　　**当一个节点收到和自己任期相等的请求投票 RPC**。说明当前节点和请求节点在竞争同一个任期内的 leader，这时需要判断自己是否已经给别人或者自己投过票，如果投过（自己或者别人），则拒绝投票，否则给其投票。<br>
 
 <div style="text-align: center;"> 
-    <img src="./pictures/example4.jpeg" title="term" width="580" height="550">
+    <img src="./pictures/example4.jpeg" title="term" width="525" height="510">
 </div> 
 
 
@@ -292,17 +287,17 @@ type Raft struct {
 　　③ <span style="color: red;">**请求的任期 == 当前节点的任期 && 待同步日志的上一条日志的 index > 当前节点最新日志的 index**</span>，说明当前节点没有待同步日志的上一条日志，也即日志缺失，结束并返回结果。<br>
 　　④ <span style="color: red;">**请求的任期 == 当前节点的任期 && 当前节点包含待同步日志的上一条日志 && 两个日志的 term 不同**</span>，说明在某个时间点，当前节点和领导者节点的日志发生了分叉，即两者在同一个日志索引处存储了不同的日志条目。如下图所示，S3 在同步 index 3 的日志时，发现 index 2 的日志和 S1 不一致，此时需要将本节点 index 2 的日志进行覆盖，保持和 leader 一致。
 <div style="text-align: center;"> 
-    <img src="./pictures/example5.jpg" title="term" width="140" height="110">
+    <img src="./pictures/example5.jpg" title="term" width="140" height="100">
 </div> 
 
 　　⑤ <span style="color: red;">**请求的任期 == 当前节点的任期 && 当前节点包含待同步日志的上一条日志 && 两个日志的 term 相同**</span>，说明可以开始进行日志复制了，但还需要注意日志截断。如下图所示，S3 在同步 index 3 的日志时，上一个节点相同，但仍需要将本节点 index 3 的日志进行覆盖，从而保持和 leader 一致。
 <div style="text-align: center;"> 
-    <img src="./pictures/example6.jpg" title="term" width="140" height="110">
+    <img src="./pictures/example6.jpg" title="term" width="130" height="92">
 </div> 
 
 　　另外，实现时并不是每个日志都使用一个追加日志 RPC 来发送，而是 leader 中会保存每个 follower 中最新的日志的 index，然后将 leader 所有 index > 保存的 index 的日志统一一起打包发送给 follower。如下图中的蓝色方块，它们将会一起被发送至 S3。
 <div style="text-align: center;"> 
-    <img src="./pictures/example7.jpg" title="term" width="140" height="100">
+    <img src="./pictures/example7.jpg" title="term" width="140" height="95">
 </div> 
 
 #### 3、Raft 的日志一致性检查优化
@@ -338,12 +333,18 @@ type AppendEntriesReply struct {
 　　② follower S2 发现日志冲突，因为它节点中 index 为 7 的日志，term 是 4。按照优化算法返回给 leader 响应是：XIndex = 0（term 为 4 的第一条日志的下标），XTerm = 4。 <br>
 　　③ 如果没有 XTerm，那么会下一次同步 nextIndex 为 0，会将 0~7 的日志全部同步。而如果有 XTerm ，根据 Raft 的日志匹配特性，下一次同步只需要传输 6~7 的日志。
 
+#### 4、nextIndex 和 matchIndex
+　　nextIndex[i]：表示 leader 下一个要发送给 follower i 的日志索引。<br>
+　　matchIndex[i]：表示已经成功复制到 follower i 的最新日志索引，leader 会根据该数组来确定是否能够提交日志。
+
+　　**问题：nextIndex 不是等于 matchIndex+1 吗？为什么需要两个变量呢？<br>**
+　　答：正常情况下，nextIndex 确实等于 matchIndex+1。但是假如某个时刻 leader 崩溃，这时会进行 leader 选举，新的主节点被选出来以后，会假设所有的 follower 的数据最新，即设置 nextIndex = len(log)+1，matchIndex = 0，后面如果日志复制失败，才会开始回退，这是出于性能考虑。
 
 
 ### 5.6、日志提交
 　　leader 在每次复制日志到 follower 时，会在 RPC 中携带当前已经提交的日志位置（commitIndex）。如果 follower 复制成功，则会更新它的提交日志位置为 min(args.LeaderCommit, rf.log.lastLog().Index)，位置前面的日志代表已提交。
 
-　　问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？
+　　**问题：为什么是取 min(args.LeaderCommit, rf.log.lastLog().Index) 呢？**
 <div style="text-align: center;"> 
     <img src="./pictures/example8.jpg" title="term" width="500" height="140">
 </div> 
@@ -375,12 +376,27 @@ type AppendEntriesReply struct {
 　　持久化真实的实现会在每次更改时将 Raft 的持久状态写入磁盘，并在重启后从磁盘读取状态。但因为是模拟实现，所以代码中会使用 Persister 对象（见 persister.go）来保存和恢复持久状态。具体是 Persister 的 ReadRaftState() 和 SaveRaftState() 方法。<br>
 　　调用 Raft.Make() 的用户会提供一个最初包含 Raft 最近持久化状态（如果有）的 Persister。Raft 应该从这个 Persister 初始化其状态，并在每次状态更改时使用它来保存其持久状态。
 
+### 5.8、日志压缩
+　　该实验的痛点在于，经过了 Snapshot 后，日志只剩下后面的部分，所以原来的代码里需要做全面的下标（index）更换。以及，我们需要为 Raft 增加两个状态：lastIncludedIndex，lastIncludedTerm，来记录 Snapshot 到哪里了。<br>
 
-### 5.8、checkOneLeader
+- 节点启动时 lastIncludedIndex、lastIncludedTerm 设置为 0。
+- 测试时每当节点中提交了 10 个日志，则触发一次 snapshot。
+- **节点日志下标访问**。需考虑快照的偏移，即减去 lastIncludedIndex，再在 logs 中进行数据下标访问。
+- **持久化**。持久化时需保存快照的 lastIncludedIndex 和 lastIncludedTerm。
+- **日志复制**。
+  - 如果 follower 的下一个待复制日志的 index 小于快照的 lastIncludedIndex，则 leader 向 follower 发送快照。
+  - follower 收到快照时，则将更新节点的 logs，快照 lastIncludedIndex 前的日志进行删除。
+
+
+
+### 5.9、checkOneLeader
 　　检查集群中是否只存在一个 leader。此处循环 10 次的原因是：分布式系统中某时刻正在选举，可能没有 leader。
 <div style="text-align: center;"> 
-    <img src="./pictures/checkleaderone.jpg" title="term" width="400" height="400">
+    <img src="./pictures/checkleaderone.jpg" title="term" width="350" height="400">
 </div> 
+
+
+
 
 
 ## 六、测试项
@@ -423,7 +439,7 @@ type AppendEntriesReply struct {
 ### 6.10、TestBackup2B
 　　测试领导者在日志不一致的情况下，能够快速回滚（backup）并使其日志与集群其他成员的日志保持一致。
 <div style="text-align: center;"> 
-    <img src="./pictures/test_rejoin2B.jpg" title="term" width="960" height="600">
+    <img src="./pictures/test_rejoin2B.jpg" title="term" width="960" height="595">
 </div> 
 
 ### 6.11、TestCount2B
@@ -432,10 +448,10 @@ type AppendEntriesReply struct {
 　　测试在集群空闲时，RPC 调用次数是否合理。<br>
 
 ### 6.12、TestPersist12C
-　　测试了服务器在崩溃和重新启动后是否能正确恢复并继续工作。
+　　测试了服务器在崩溃和重新启动后是否能正确恢复并继续工作。<br>
 
-
-
+### 6.13、快照相关（2D）
+　　测试在存在快照的前提下，节点断连和崩溃重启后，日志是否同步。
 
 ## 参考链接：
 

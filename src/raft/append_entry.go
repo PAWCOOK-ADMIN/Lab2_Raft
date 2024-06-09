@@ -28,26 +28,39 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 			rf.resetElectionTimer() // 重置 electionTime，并跳过
 			continue
 		}
+
+		// 发送快照
+		if rf.nextIndex[peer]-1 < rf.lastIncludeIndex {
+			go rf.leaderSendSnapShot(peer)
+			return
+		}
+
 		// rules for leader 3
 		if lastLog.Index >= rf.nextIndex[peer] || heartbeat {
 			nextIndex := rf.nextIndex[peer]
 			if nextIndex <= 0 {
 				nextIndex = 1
 			}
-			if lastLog.Index+1 < nextIndex {
+			if lastLog.Index < nextIndex {
 				nextIndex = lastLog.Index
 			}
-			prevLog := rf.log.at(nextIndex - 1)
+			prevLogIndex, prevLogTerm := rf.getPrevLogInfo(peer)
 			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,                           // 任期
-				LeaderId:     rf.me,                                    // leaderID，集群节点数据的下标
-				PrevLogIndex: prevLog.Index,                            // 上一个日志的index
-				PrevLogTerm:  prevLog.Term,                             // 上一个日志的任期
-				Entries:      make([]Entry, lastLog.Index-nextIndex+1), // 所有新的日志
+				Term:         rf.currentTerm, // 任期
+				LeaderId:     rf.me,          // leaderID，集群节点数据的下标
+				PrevLogIndex: prevLogIndex,   // 上一个日志的index
+				PrevLogTerm:  prevLogTerm,    // 上一个日志的任期
 				LeaderCommit: rf.commitIndex,
 			}
-			copy(args.Entries, rf.log.slice(nextIndex)) // 填充日志
-			go rf.leaderSendEntries(peer, &args)        // 给节点发送追加条目RPC
+			// 填充日志
+			if rf.getLastIndex() >= rf.nextIndex[peer] {
+				entries := make([]Entry, 0)
+				entries = append(entries, rf.log.Entries[nextIndex-rf.lastIncludeIndex:]...)
+				args.Entries = entries
+			} else {
+				args.Entries = []Entry{}
+			}
+			go rf.leaderSendEntries(peer, &args) // 给节点发送追加条目RPC
 		}
 	}
 }
@@ -93,6 +106,10 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
 		} else if rf.nextIndex[serverId] > 1 {
 			rf.nextIndex[serverId]-- // 将 nextIndex 回退，以便重试，Raft 算法的一致性规则
+			//if reply.XSnapFlag {
+			//	rf.nextIndex[serverId] = reply.XIndex      // 将 nextIndex 回退，以便重试，Raft 算法的一致性规则
+			//	rf.matchIndex[serverId] = reply.XIndex - 1 // 更新已复制到该服务器的最高日志条目的索引
+			//}
 		}
 		rf.leaderCommitRule()
 	}
@@ -100,8 +117,8 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 
 // 返回节点任期为 x 的最新的一个日志 index
 func (rf *Raft) findLastLogInTerm(x int) int {
-	for i := rf.log.lastLog().Index; i > 0; i-- {
-		term := rf.log.at(i).Term
+	for i := rf.getLastIndex(); i > rf.lastIncludeIndex; i-- {
+		term := rf.restoreLogTerm(i)
 		if term == x {
 			return i
 		} else if term < x {
@@ -117,10 +134,10 @@ func (rf *Raft) leaderCommitRule() {
 		return
 	}
 
-	for n := rf.commitIndex + 1; n <= rf.log.lastLog().Index; n++ {
-		if rf.log.at(n).Term != rf.currentTerm { // 不能提交之前任期内的日志条目
-			continue
-		}
+	for n := rf.commitIndex + 1; n <= rf.getLastIndex(); n++ {
+		//if rf.restoreLogTerm(n) != rf.currentTerm { // 不能提交之前任期内的日志条目
+		//	continue
+		//}
 		counter := 1
 		for serverId := 0; serverId < len(rf.peers); serverId++ {
 			if serverId != rf.me && rf.matchIndex[serverId] >= n { // 遍历每个 follower，如果已经复制了该日志
@@ -165,52 +182,63 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.state = Follower
 	}
 
+	// follower 收到在自己快照之前的日志，返回 true
+	if rf.lastIncludeIndex > args.PrevLogIndex { // true 代表所有的日志都复制成功
+		reply.Success = false
+		reply.XIndex = rf.lastIncludeIndex + 1
+		return
+	}
+
 	// 检查日志是否与前一个日志条目匹配
-	if rf.log.lastLog().Index < args.PrevLogIndex {
+	if rf.getLastIndex() < args.PrevLogIndex {
 		reply.Conflict = true // 日志不匹配，返回冲突信息
 		reply.XTerm = -1
 		reply.XIndex = -1
-		reply.XLen = rf.log.len()
+		reply.XLen = rf.getLastIndex()
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		return
 	}
 
 	// 检查日志条目的任期是否匹配
-	if rf.log.at(args.PrevLogIndex).Term != args.PrevLogTerm {
+	if rf.restoreLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
 		reply.Conflict = true // 日志条目任期不匹配，返回冲突信息
-		xTerm := rf.log.at(args.PrevLogIndex).Term
+		xTerm := rf.restoreLogTerm(args.PrevLogIndex)
 		// 找到冲突 term 的首次出现位置
-		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
-			if rf.log.at(xIndex-1).Term != xTerm {
+		for xIndex := args.PrevLogIndex; xIndex > rf.lastIncludeIndex; xIndex-- {
+			if rf.restoreLogTerm(xIndex-1) != xTerm {
 				reply.XIndex = xIndex // xIndex-1
 				break
 			}
 		}
 		reply.XTerm = xTerm
-		reply.XLen = rf.log.len()
+		reply.XLen = rf.getLastIndex()
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		return
 	}
 
-	// 追加新条目到日志
-	for idx, entry := range args.Entries {
-		// 附加条目 RPC 规则 3：如果日志条目索引冲突，截断日志
-		if entry.Index <= rf.log.lastLog().Index && rf.log.at(entry.Index).Term != entry.Term {
-			rf.log.truncate(entry.Index)
-			rf.persist()
-		}
-		// 附加条目 RPC 规则 4：如果日志条目索引大于当前最后一个日志条目索引，追加新条目
-		if entry.Index > rf.log.lastLog().Index {
-			rf.log.append(args.Entries[idx:]...)
-			DPrintf("[%d]: follower append [%v]", rf.me, args.Entries[idx:])
-			rf.persist()
-			break
-		}
-	}
+	//// 追加新条目到日志
+	//for idx, entry := range args.Entries {
+	//	// 附加条目 RPC 规则 3：如果日志条目索引冲突，截断日志
+	//	if entry.Index <= rf.log.lastLog().Index && rf.log.at(entry.Index).Term != entry.Term {
+	//		rf.log.truncate(entry.Index)
+	//		rf.persist()
+	//	}
+	//	// 附加条目 RPC 规则 4：如果日志条目索引大于当前最后一个日志条目索引，追加新条目
+	//	if entry.Index > rf.log.lastLog().Index {
+	//		rf.log.append(args.Entries[idx:]...)
+	//		DPrintf("[%d]: follower append [%v]", rf.me, args.Entries[idx:])
+	//		rf.persist()
+	//		break
+	//	}
+	//}
+
+	rf.log.Entries = append(rf.log.Entries[:args.PrevLogIndex+1-rf.lastIncludeIndex], args.Entries...)
+
+	rf.persist()
 
 	// 附加条目 RPC 规则 5：更新提交索引并应用
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.log.lastLog().Index) // 更新本节点的已提交位置
+		rf.commitIndex = min(args.LeaderCommit, rf.getLastIndex()) // 更新本节点的已提交位置
 		rf.apply()
 	}
 	reply.Success = true

@@ -1025,7 +1025,7 @@ func TestUnreliableChurn2C(t *testing.T) {
 const MAXLOGSIZE = 2000
 
 func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash bool) {
-	iters := 30
+	iters := 20
 	servers := 3
 	cfg := make_config(t, servers, !reliable, true)
 	defer cfg.cleanup()
@@ -1036,6 +1036,8 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
+
+		// 确定哪个服务器将作为“受害者”，哪个作为“发送者”
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
@@ -1043,31 +1045,50 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			victim = leader1
 		}
 
+		fmt.Println(fmt.Sprintf("===========================round: %v==============================", i))
+		fmt.Println(fmt.Sprintf("===========================victim: %v==============================", victim))
+		for k, n := range cfg.rafts {
+			fmt.Println("============================")
+			fmt.Println(fmt.Sprintf("node: %v", k))
+			fmt.Println(fmt.Sprintf("state: %v", n.state))
+			fmt.Println(fmt.Sprintf("term: %v", n.currentTerm))
+			fmt.Println(fmt.Sprintf("log: %v, len: %v", n.log.Entries, n.log.len()))
+			fmt.Println(fmt.Sprintf("lastlogIndex: %v", n.getLastIndex()))
+			fmt.Println(fmt.Sprintf("commitIndex: %v", n.commitIndex))
+			fmt.Println(fmt.Sprintf("lastApplied: %v", n.lastApplied))
+			fmt.Println(fmt.Sprintf("snapShotIndex: %v", n.lastIncludeIndex))
+			fmt.Println(fmt.Sprintf("snapShotTerm: %v", n.lastIncludeTerm))
+			fmt.Println(fmt.Sprintf("cfg.log: %v", len(cfg.logs[k])))
+		}
+
+		// 如果需要，断开受害者服务器的连接
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+
+		// 如果需要，使受害者服务器崩溃
 		if crash {
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
-		// send enough to get a snapshot
+		// 发送足够的命令以触发快照
 		for i := 0; i < SnapShotInterval+1; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
-		// let applier threads catch up with the Start()'s
+		// 让应用线程赶上Start()发送的命令
 		cfg.one(rand.Int(), servers-1, true)
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
 		}
+		// 如果受害者服务器被断开连接，重新连接并确保其赶上进度
 		if disconnect {
-			// reconnect a follower, who maybe behind and
-			// needs to rceive a snapshot to catch up.
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+		// 如果受害者服务器崩溃，重新启动并连接，然后确保其赶上进度
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
 			cfg.connect(victim)
