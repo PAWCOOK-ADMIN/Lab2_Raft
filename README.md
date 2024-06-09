@@ -331,7 +331,7 @@ type AppendEntriesReply struct {
 
 　　① leader S1 发送心跳，其中 prevLogIndx 为 7，prevLogTerm 为 5。<br>
 　　② follower S2 发现日志冲突，因为它节点中 index 为 7 的日志，term 是 4。按照优化算法返回给 leader 响应是：XIndex = 0（term 为 4 的第一条日志的下标），XTerm = 4。 <br>
-　　③ 如果没有 XTerm，那么会下一次同步 nextIndex 为 0，会将 0~7 的日志全部同步。而如果有 XTerm ，根据 Raft 的日志匹配特性，下一次同步只需要传输 6~7 的日志。
+　　③ 如果没有 XTerm，那么会下一次同步 nextIndex 为 0，会将 0\~7 的日志全部同步。而如果有 XTerm ，根据 Raft 的日志匹配特性，下一次同步只需要传输 6\~7 的日志。
 
 #### 4、nextIndex 和 matchIndex
 　　nextIndex[i]：表示 leader 下一个要发送给 follower i 的日志索引。<br>
