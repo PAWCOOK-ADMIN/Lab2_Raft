@@ -307,8 +307,8 @@ type Raft struct {
 　　一个一个的往前找下一个应该复制给 follower 的日志是不是太慢了？所以在 follower 的拒绝响应中增加了 XTerm、XIndex 等相关字段。<span style="color: red;">领导者根据这个字段来找到其自身日志中与冲突任期相同的最后一个条目位置，以便调整 nextIndex，从而有效地解决冲突</span>。具体情况可见 3.5 中的第一部分。<br>
 
 　　**优化算法逻辑如下：<br>**
-　　① 如果一个 follower 的日志中没有 prevLogIndex，那么它应该返回 XIndex = len(log) 和 XTerm = None。<br>
-　　② 如果一个 follower 的日志中有 prevLogIndex，但是对应的 term 不匹配，那么它应该返回 XTerm = log[prevLogIndex].Term，然后在它的日志中从左到右搜索第一个 term 等于 log[prevLogIndex].Term 的日志，并将其 index 设置给 XIndex。<br>
+　　① 如果一个 follower 的日志中没有 prevLogIndex（上一条日志的索引），说明 leader 的上一条日志也已经领先 follower 了，此时 follower 应该返回自身所有日志的长度，即 XIndex = len(log) 和 XTerm = None。<br>
+　　② 如果一个 follower 的日志中有 prevLogIndex，但是对应的 term 不匹配，说明日志存在冲突，此时 follower 应该返回最先冲突的日志点（可能的）。即 XTerm = log[prevLogIndex].Term，然后在它的日志中从左到右搜索第一个 term 等于 log[prevLogIndex].Term 的日志，并将其 index 设置给 XIndex。<br>
 　　③ 当 leader 收到冲突响应时，首先应在其日志中搜索 XTerm 最后一次出现的位置。如果找到了，则设置 nextIndex 为该日志之后的一个的 index。<br>
 　　④ 如果它在日志中找不到具有该 term 的条目，则应将 nextIndex 设置为 index。<br>
 
